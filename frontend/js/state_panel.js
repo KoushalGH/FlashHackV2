@@ -106,14 +106,20 @@ const StatePanel = (() => {
         const cab = currentCabs.find(c => c.pid === pid);
         if (cab) {
             cab.state = newState;
-            cab.ride = ride || cab.ride;
+            if (ride !== undefined) cab.ride = ride;
             render();
 
             // Flash animation on the updated row
             const row = document.querySelector(`tr[data-pid="${pid}"]`);
             if (row) {
-                row.style.background = 'rgba(0,255,136,0.08)';
-                setTimeout(() => { row.style.background = ''; }, 800);
+                row.classList.remove('flash');
+                void row.offsetWidth; // trigger reflow for re-animation
+                row.classList.add('flash');
+            }
+
+            // Trigger cab flash on graph canvas
+            if (typeof GraphViz !== 'undefined' && newState === 'DISPATCHED') {
+                GraphViz.flashCab(pid);
             }
         }
     }

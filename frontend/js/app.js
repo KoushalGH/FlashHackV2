@@ -54,13 +54,15 @@ const App = (() => {
                 showDispatchResult(result);
 
                 // Log state transitions from the result
+                addLogEntry('STATE',
+                    `Cab-${String(result.cab.pid).padStart(2,'0')}: IDLE → DISPATCHED → EN_ROUTE`,
+                    'state');
                 addLogEntry('DISPATCH',
                     `${result.cab.name} dispatched via ${method.toUpperCase()} — ${result.hops} hops, ${result.time_ms}ms`,
                     'dispatch');
 
-                if (result.alternatives && result.alternatives.length > 0) {
-                    addLogEntry('ROUTE', `DFS found ${result.alternatives.length} alternative route(s)`, 'route');
-                }
+                // Flash the dispatched cab on graph
+                if (result.cab.pid) GraphViz.flashCab(result.cab.pid);
 
                 if (result.surge && result.surge.active) {
                     addLogEntry('SURGE',
@@ -145,6 +147,9 @@ const App = (() => {
         }
 
         panel.style.display = 'block';
+        panel.className = 'dispatch-result';
+        void panel.offsetWidth;
+        panel.className = 'dispatch-result show';
         document.getElementById('result-cab').textContent = result.cab.name;
         document.getElementById('result-method').textContent = result.method.toUpperCase();
         document.getElementById('result-hops').textContent = `${result.hops} hops`;
