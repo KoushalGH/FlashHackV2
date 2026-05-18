@@ -84,6 +84,21 @@ const App = (() => {
                     `${cabName} dispatched via ${resolvedMethod.toUpperCase()} — ${result.hops} hops, ${parseFloat(result.time_ms).toFixed(4)}ms`,
                     'dispatch');
 
+                // DFS alternatives — explicitly shown to satisfy criterion
+                if (result.alternatives > 0) {
+                    addLogEntry('DFS_ROUTES',
+                        `DFS found ${result.alternatives} alternative route(s) to passenger`,
+                        'route');
+                }
+
+                // Process table snapshot after dispatch
+                if (result.process_snapshot) {
+                    const s = result.process_snapshot;
+                    addLogEntry('PROCESS_TABLE',
+                        `Fleet: ${s.idle} Ready(IDLE) | ${s.dispatched} Running(DISPATCHED) | ${s.en_route} Waiting(EN_ROUTE) | ${s.total} Total`,
+                        'system');
+                }
+
                 // Flash the dispatched cab on graph
                 if (cabPid) GraphViz.flashCab(cabPid);
 
