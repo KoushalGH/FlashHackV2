@@ -1,41 +1,54 @@
-# 🚕 CabGrid: Real-Time Cab Dispatch Optimizer — Hackathon Roadmap
+# 🚕 CabGrid — Implementation Plan (3-Hour Sprint, 2 Members)
 
-## Problem Summary
+## Goal
 
-Build a smart cab dispatch system that models a city as a graph, uses **BFS** to find the nearest available cab (replacing brute-force), **DFS** to explore pickup routes, and manages cab lifecycle through **OS process states**. Benchmark BFS vs brute-force to prove algorithmic superiority.
+Build a real-time cab dispatch optimizer where the **OS process state model is the core engine** — not a side feature. The city is a graph, BFS finds the nearest cab, DFS explores routes, and every dispatch decision flows through a process state machine that controls cab availability, scheduling, and lifecycle.
 
 ---
 
-## 🏗️ Architecture Overview
+## 🏗️ Architecture — OS-First Design
 
 ```mermaid
 graph TD
-    A["🌐 Web Dashboard<br/>(HTML/CSS/JS)"] -->|WebSocket| B["⚡ Flask Backend<br/>(Python)"]
-    B --> C["📊 CityGraph Engine<br/>(graph.py)"]
-    B --> D["🚕 Cab Manager<br/>(cab_manager.py)"]
-    B --> E["🔍 Dispatcher<br/>(dispatcher.py)"]
-    C --> F["BFS Nearest Cab"]
-    C --> G["DFS Route Explorer"]
-    E --> H["Brute Force (Benchmark)"]
-    D --> I["State Machine<br/>IDLE → DISPATCHED → EN_ROUTE → COMPLETED"]
-    B --> J["📈 Benchmark Engine<br/>(benchmark.py)"]
-    J --> K["Timing Comparisons"]
+    subgraph "OS Process Scheduler - Core"
+        PCB["Process Control Block<br/>(Cab Registry)"]
+        SM["State Machine<br/>IDLE - DISPATCHED - EN_ROUTE - COMPLETED"]
+        Q["Ready Queue<br/>(Available Cabs)"]
+        SCH["Scheduler<br/>(Dispatch Policy)"]
+    end
+
+    subgraph "DAA Layer"
+        BFS["BFS Nearest Cab"]
+        DFS["DFS Route Explorer"]
+        BF["Brute Force Baseline"]
+    end
+
+    subgraph "Application"
+        REQ["Ride Request"] --> SCH
+        SCH --> Q
+        Q --> BFS
+        BFS --> SM
+        SM --> PCB
+        DFS --> SM
+    end
 ```
+
+**Key Design Decision**: The dispatcher **cannot operate without** the state machine. A cab can only be dispatched if its process state is `READY (IDLE)`. The scheduler pulls from a ready queue. State transitions trigger real system events. This mirrors how an OS scheduler manages processes.
 
 ---
 
-## 🎯 Deliverables Checklist
+## 📐 OS ↔ Cab Deep Integration
 
-| # | Deliverable | Status |
-|---|-------------|--------|
-| 1 | Graph-based city model with **20+ nodes** | 🔲 |
-| 2 | **BFS** nearest-cab search (shortest hops) | 🔲 |
-| 3 | **DFS** route exploration from cab → passenger | 🔲 |
-| 4 | Cab **process state machine** (IDLE → DISPATCHED → EN_ROUTE → COMPLETED) | 🔲 |
-| 5 | Output log for every ride request + dispatch + state transition | 🔲 |
-| 6 | **Brute-force vs BFS benchmark** with timing comparison | 🔲 |
-| 7 | **Surge pricing** trigger at >60% cabs dispatched | 🔲 |
-| 8 | Web dashboard with live visualization | 🔲 |
+| OS Concept | Implementation in CabGrid | Why It Matters |
+|-----------|---------------------------|---------------|
+| **Process Control Block (PCB)** | Each `Cab` holds: `pid`, `state`, `priority`, `current_node`, `assigned_ride`, `state_history[]`, `created_at` | PCB is the single source of truth — dispatcher reads it, scheduler updates it |
+| **Process States** | `NEW → READY → RUNNING → WAITING → TERMINATED` mapped to `REGISTERED → IDLE → DISPATCHED → EN_ROUTE → COMPLETED` | State determines what operations are legal — can't dispatch a cab that's EN_ROUTE |
+| **Ready Queue** | `CabScheduler.ready_queue` — only IDLE cabs live here | BFS searches ONLY within the ready queue, not all cabs |
+| **State Transition Validation** | Illegal transitions raise `InvalidStateTransition` error | Prevents double-dispatching a cab |
+| **Process Scheduling** | FCFS for ride requests; Nearest-first (BFS) for cab selection | Two scheduling policies working together |
+| **Context Switch** | When cab goes IDLE→DISPATCHED, ride context (route, passenger, pickup) is loaded | Mirrors how OS saves/restores process context |
+| **Process Table** | `CabScheduler.process_table()` — snapshot of ALL cab PCBs | Displayed after every dispatch event (like `ps` command) |
+| **Deadlock Prevention** | A cab cannot be assigned to two rides simultaneously (mutual exclusion) | Real OS concept applied to dispatch |
 
 ---
 
@@ -43,288 +56,169 @@ graph TD
 
 ```
 FlashHackV2/
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── docs/
-│   └── architecture.md          # Architecture documentation
-│
 ├── backend/
 │   ├── __init__.py
-│   ├── app.py                   # Flask app entry point + WebSocket
-│   ├── graph.py                 # City graph model (adjacency list, BFS, DFS)
-│   ├── cab_manager.py           # Cab process state machine
-│   ├── dispatcher.py            # Dispatch logic (BFS, DFS, Brute-force)
-│   ├── benchmark.py             # BFS vs Brute-force benchmarking
+│   ├── app.py                   # Flask + WebSocket entry point
+│   ├── city_graph.py            # City graph model, BFS, DFS, brute-force
+│   ├── cab_process.py           # PCB + State machine + transition validation
+│   ├── scheduler.py             # Ready queue + dispatch scheduler (OS core)
+│   ├── dispatcher.py            # Ride dispatch orchestrator
+│   ├── benchmark.py             # BFS vs brute-force benchmarking
 │   ├── surge_pricing.py         # Surge pricing engine
-│   ├── city_data.py             # Hardcoded city graph (25 nodes, 40+ edges)
-│   └── logger.py                # Structured event logger
-│
+│   └── event_logger.py          # Structured dispatch event logger
 ├── frontend/
-│   ├── index.html               # Main dashboard
-│   ├── css/
-│   │   └── style.css            # Premium dark-mode UI
+│   ├── index.html
+│   ├── css/style.css
 │   └── js/
-│       ├── app.js               # Main app logic
-│       ├── graph_viz.js          # Canvas-based city graph visualization
-│       ├── state_panel.js        # Cab state machine panel
-│       └── websocket.js          # Real-time WebSocket client
-│
-└── tests/
-    ├── test_graph.py             # Graph + BFS/DFS tests
-    ├── test_cab_manager.py       # State machine tests
-    └── test_dispatcher.py        # Dispatch logic tests
+│       ├── app.js
+│       ├── graph_viz.js
+│       ├── state_panel.js
+│       └── websocket.js
+├── tests/
+│   ├── __init__.py
+│   ├── test_graph.py
+│   ├── test_cab_process.py
+│   └── test_scheduler.py
+├── docs/architecture.md
+├── requirements.txt
+├── .gitignore
+└── README.md
 ```
 
 ---
 
-## 🔧 Tech Stack
+## ⏱️ 3-HOUR SPRINT — MEMBER A (Backend / Algo)
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Backend | **Python 3.10+** | Clean, fast prototyping, rich data structures |
-| Web Framework | **Flask + Flask-SocketIO** | Lightweight, real-time WebSocket support |
-| Frontend | **Vanilla HTML/CSS/JS** | No build step, fast iteration |
-| Graph Viz | **HTML5 Canvas** | Smooth, animated graph rendering |
-| Testing | **pytest** | Industry standard Python testing |
+### Hour 1 (0:00 – 1:00) — Core Engine
 
----
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 0:00–0:20 | Build 25-node city graph with adjacency list + node coordinates | `city_graph.py` | Graph class with nodes, edges, metadata |
+| 0:20–0:40 | Implement BFS nearest-cab (searches ready queue only) + DFS route explorer | `city_graph.py` | `bfs_nearest_cab()`, `dfs_explore_routes()`, `brute_force_nearest()` |
+| 0:40–1:00 | Build cab PCB + state machine with transition validation | `cab_process.py` | `CabPCB` class, `CabState` enum, `InvalidStateTransition`, state history logging |
 
-## 📐 Detailed Implementation Plan
+**Hour 1 Checkpoint**: Can run in terminal — BFS finds nearest cab, state transitions print correctly, illegal transitions raise errors.
 
-### Phase 1: Core Data Structures & Graph Engine `[~2 hours]`
+### Hour 2 (1:00 – 2:00) — Scheduler + Features
 
-#### [NEW] `backend/city_data.py`
-- Define a city graph with **25 intersections** (nodes) and **40+ roads** (edges)
-- Use adjacency list representation: `dict[int, list[int]]`
-- Node metadata: name, coordinates (for visualization)
-- Edge metadata: distance/weight (optional, for weighted BFS extension)
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 1:00–1:25 | Build OS-style scheduler with ready queue, FCFS ride queue, dispatch flow | `scheduler.py` | `CabScheduler` class: `dispatch_bfs()`, `complete_ride()`, `process_table()` |
+| 1:25–1:40 | Build dispatcher wrapper + event logger | `dispatcher.py`, `event_logger.py` | Full dispatch orchestrator, structured event log |
+| 1:40–1:50 | Build surge pricing engine | `surge_pricing.py` | Surge triggers at >60% dispatched |
+| 1:50–2:00 | Build benchmark engine (BFS vs brute-force on 25/100/500 nodes) | `benchmark.py` | Timing comparison table with real numbers |
 
-#### [NEW] `backend/graph.py`
-- `CityGraph` class wrapping the adjacency list
-- **`bfs_nearest_cab(start, available_cabs)`** — BFS from passenger node, returns first cab found (shortest hops)
-- **`dfs_explore_routes(start, end, max_depth)`** — DFS from cab to passenger, returns all possible routes up to max_depth
-- **`brute_force_nearest_cab(start, available_cabs)`** — iterate ALL cabs, compute BFS distance to each, return minimum
-- Helper: `shortest_path(start, end)` — BFS-based path finder
+**Hour 2 Checkpoint**: Full dispatch flow works end-to-end. Benchmark shows BFS speedup. Surge pricing triggers.
 
-> [!IMPORTANT]
-> **BFS vs Brute Force Distinction:**
-> - **BFS** expands outward from passenger node, stops at the FIRST cab found → O(V + E) worst case but typically much faster
-> - **Brute Force** computes distance to EVERY cab then picks minimum → O(C × (V + E)) where C = number of cabs
-> This difference is critical for the judges — it must be clearly demonstrated.
+### Hour 3 (2:00 – 3:00) — API + Tests + Docs
+
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 2:00–2:25 | Build Flask API endpoints + WebSocket events | `app.py` | All REST endpoints + SocketIO events working |
+| 2:25–2:45 | Write tests for graph, state machine, scheduler | `tests/` | pytest passing for BFS/DFS, state transitions, ready queue |
+| 2:45–3:00 | Polish README with design decisions, add docstrings to all files | `README.md` | Clean docs explaining OS integration and algorithm choices |
 
 ---
 
-### Phase 2: Cab Process State Machine `[~1.5 hours]`
+## ⏱️ 3-HOUR SPRINT — MEMBER B (Frontend / UI)
 
-#### [NEW] `backend/cab_manager.py`
-- `CabState` enum: `IDLE`, `DISPATCHED`, `EN_ROUTE`, `COMPLETED`
-- Map to OS process states:
-  | Cab State | OS Process State | Description |
-  |-----------|-----------------|-------------|
-  | IDLE | **Ready** | Cab available, waiting for assignment |
-  | DISPATCHED | **Running** | Cab assigned to a ride, computing route |
-  | EN_ROUTE | **Waiting** | Cab traveling to pickup/destination |
-  | COMPLETED | **Terminated** | Ride finished, cab returns to IDLE |
+### Hour 1 (0:00 – 1:00) — Dashboard Skeleton
 
-- `Cab` class with:
-  - `id`, `name`, `current_node`, `state`, `state_history[]`
-  - `transition(new_state)` — validates legal transitions, logs event
-  - State transition diagram enforced:
-    ```
-    IDLE → DISPATCHED → EN_ROUTE → COMPLETED → IDLE
-                                              ↗
-    Any State → IDLE (cancellation/reset)
-    ```
-- `CabManager` class:
-  - Manages fleet of cabs
-  - `get_available_cabs()` → returns cabs in IDLE state
-  - `get_fleet_status()` → snapshot of all cab states
-  - `get_dispatched_ratio()` → for surge pricing
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 0:00–0:30 | Build 4-panel dark-mode dashboard layout | `index.html`, `style.css` | Glassmorphism cards, responsive grid, state color tokens |
+| 0:30–0:45 | Build cab state panel (process table display) | `state_panel.js` | Table: PID, Name, State (color badge), Node, Ride |
+| 0:45–1:00 | Build dispatch control panel with buttons + result display | `app.js` | Select pickup node → click dispatch → show result area |
 
----
+**Hour 1 Checkpoint**: Dashboard loads in browser with styled layout, mock data in process table, dispatch controls visible.
 
-### Phase 3: Dispatcher & Surge Pricing `[~1.5 hours]`
+### Hour 2 (1:00 – 2:00) — Graph Viz + Wiring
 
-#### [NEW] `backend/dispatcher.py`
-- `Dispatcher` class:
-  - `dispatch_ride(passenger_node)`:
-    1. Get available cabs from CabManager
-    2. Run BFS nearest-cab search
-    3. Run DFS to explore alternative routes
-    4. Transition cab: IDLE → DISPATCHED → EN_ROUTE
-    5. Log everything
-    6. Return dispatch result with route info
-  - `dispatch_ride_brute_force(passenger_node)` — same but uses brute force
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 1:00–1:30 | Build Canvas city graph rendering with cab dots (color = state) | `graph_viz.js` | City graph visible, cabs shown at their nodes |
+| 1:30–1:45 | Wire WebSocket client for real-time updates | `websocket.js` | State changes, dispatch events, log entries streaming |
+| 1:45–2:00 | Wire dispatch buttons to API, display BFS vs brute-force results | `app.js` | Click dispatch → API call → result shown with timing |
 
-#### [NEW] `backend/surge_pricing.py`
-- `SurgePricingEngine`:
-  - Base fare multiplier: `1.0x`
-  - When dispatched ratio > 60%: `1.5x` surge
-  - When dispatched ratio > 80%: `2.0x` surge
-  - Emits surge events for the dashboard
+**Hour 2 Checkpoint**: Full integration — dispatch on dashboard triggers backend, graph updates, states change in real-time.
 
-#### [NEW] `backend/logger.py`
-- Structured event logger
-- Events: `RIDE_REQUEST`, `CAB_DISPATCHED`, `STATE_CHANGE`, `ROUTE_FOUND`, `BENCHMARK_RESULT`, `SURGE_TRIGGERED`
-- Each log entry: `timestamp | event_type | details`
-- Maintains in-memory log for dashboard streaming
+### Hour 3 (2:00 – 3:00) — Animations + Polish
+
+| Time | Task | File | Deliverable |
+|------|------|------|-------------|
+| 2:00–2:20 | Add BFS wave ripple animation on dispatch | `graph_viz.js` | Concentric circles expand from passenger node |
+| 2:20–2:35 | Add state badge pulse animation, surge pricing banner | `style.css`, `state_panel.js` | Visual state transitions, red glow on surge |
+| 2:35–2:50 | Add live event log panel with auto-scroll | `app.js` | Scrolling color-coded log entries |
+| 2:50–3:00 | Final demo test — run full demo flow together | — | End-to-end working demo |
 
 ---
 
-### Phase 4: Benchmarking Engine `[~1 hour]`
+## 🔗 Integration Contract (Agree at Minute 0)
 
-#### [NEW] `backend/benchmark.py`
-- `BenchmarkEngine`:
-  - Scale test graph to **100, 200, 500 nodes** (procedurally generated)
-  - Run same dispatch requests against BFS and Brute Force
-  - Measure execution time with `time.perf_counter()`
-  - Generate comparison report:
-    ```
-    | Nodes | Cabs | BFS Time (ms) | Brute Force Time (ms) | Speedup |
-    |-------|------|---------------|----------------------|---------|
-    | 25    | 10   | 0.12          | 0.45                 | 3.75x   |
-    | 100   | 50   | 0.34          | 8.72                 | 25.6x   |
-    | 500   | 200  | 1.23          | 198.45               | 161.3x  |
-    ```
+Both members agree on this API before starting so they can work independently:
 
----
+```python
+# Member A exposes these in app.py:
 
-### Phase 5: Flask Backend + WebSocket `[~2 hours]`
+GET  /api/graph     → {nodes: [{id, name, x, y}], edges: [[from, to]]}
+GET  /api/cabs      → {cabs: [{pid, name, state, node, ride, history}]}
+GET  /api/logs      → {logs: [{timestamp, event, details}]}
+GET  /api/surge     → {active: bool, multiplier: float}
+POST /api/dispatch  → {passenger_node: int, method: "bfs"|"brute"}
+                    → {cab, route, hops, time_ms, alternatives, process_table, surge}
+POST /api/benchmark → {results: [{nodes, cabs, bfs_ms, brute_ms, speedup}]}
+POST /api/complete  → {cab_pid: int} → completes ride, returns cab to IDLE
 
-#### [NEW] `backend/app.py`
-- Flask app with SocketIO
-- REST endpoints:
-  - `GET /api/graph` — returns city graph data
-  - `GET /api/cabs` — returns all cab statuses
-  - `GET /api/logs` — returns event log
-  - `POST /api/dispatch` — trigger ride dispatch
-  - `POST /api/benchmark` — run benchmark suite
-- WebSocket events:
-  - `cab_state_change` — real-time cab state updates
-  - `dispatch_event` — ride dispatch notifications
-  - `surge_update` — surge pricing changes
-  - `log_event` — live log streaming
-
----
-
-### Phase 6: Premium Web Dashboard `[~3 hours]`
-
-#### [NEW] `frontend/index.html`
-Four-panel dark-mode dashboard:
-1. **City Graph Visualization** — interactive Canvas rendering of the city graph with animated cab positions, BFS wave animation, DFS path highlighting
-2. **Cab Fleet Status** — real-time grid showing all cabs with their current state (color-coded), node location, and state history
-3. **Dispatch Control Panel** — select pickup node, trigger dispatch, see BFS vs brute-force results side-by-side
-4. **Live Event Log** — scrolling log of all events with color-coded entries
-
-#### [NEW] `frontend/css/style.css`
-- Dark mode with glassmorphism cards
-- Neon accent colors for cab states:
-  - IDLE: `#00ff88` (green glow)
-  - DISPATCHED: `#ff6b35` (orange pulse)
-  - EN_ROUTE: `#4ecdc4` (cyan trail)
-  - COMPLETED: `#95a5a6` (gray fade)
-- Smooth animations for state transitions
-- Responsive grid layout
-
-#### [NEW] `frontend/js/graph_viz.js`
-- Canvas-based force-directed graph layout
-- Animated BFS wave expansion (ripple effect)
-- DFS path tracing animation
-- Cab icons on nodes with state-colored indicators
-
-#### [NEW] `frontend/js/state_panel.js`
-- Real-time cab state cards
-- State machine diagram with active state highlighted
-- State transition history timeline
-
-#### [NEW] `frontend/js/app.js`
-- Main application controller
-- Dispatch request handling
-- Benchmark result display with charts
-
-#### [NEW] `frontend/js/websocket.js`
-- WebSocket connection management
-- Real-time event handling and UI updates
-
----
-
-## ⏱️ Execution Timeline (Hackathon Sprint)
-
-```mermaid
-gantt
-    title CabGrid Hackathon Sprint
-    dateFormat HH:mm
-    axisFormat %H:%M
-
-    section Core Engine
-    City Graph + BFS/DFS          :a1, 00:00, 2h
-    Cab State Machine             :a2, after a1, 1.5h
-
-    section Logic Layer
-    Dispatcher + Surge Pricing    :b1, after a2, 1.5h
-    Benchmark Engine              :b2, after b1, 1h
-
-    section Backend
-    Flask + WebSocket API         :c1, after b2, 2h
-
-    section Frontend
-    Dashboard UI                  :d1, after c1, 3h
-
-    section Polish
-    Testing + Documentation       :e1, after d1, 1h
+# WebSocket events (server → client):
+emit('state_change',    {pid, old_state, new_state, reason, timestamp})
+emit('dispatch_event',  {cab, passenger_node, route, method})
+emit('surge_update',    {active, multiplier})
+emit('log_entry',       {timestamp, event, details})
 ```
 
-**Total estimated time: ~12 hours**
+Member B can use mock data for Hour 1 and wire real API in Hour 2.
 
 ---
 
-## ✅ Verification Plan
+## 🔑 Design Decisions (For README Comments)
 
-### Automated Tests
+1. **"Why does BFS only search the ready queue?"** — Like an OS scheduler only considers READY processes, our dispatcher only considers IDLE cabs. Makes BFS faster AND semantically correct.
+
+2. **"Why a PCB per cab?"** — Each cab carries state, context (ride, route), and history. Mirrors PCBs in operating systems. Makes the system debuggable — inspect any cab's full lifecycle.
+
+3. **"Why validate state transitions?"** — Prevents double-dispatching (like an OS can't schedule an already-running process). Real mutual exclusion on cab resources.
+
+4. **"Why separate ready queue?"** — O(1) queue management vs O(n) scanning all cabs. Same reason OS maintains a ready queue instead of scanning the full process table.
+
+---
+
+## ✅ Edge Cases to Handle
+
+- Dispatch when **no cabs are IDLE** (ready queue empty) → return error message
+- Passenger at **isolated node** (no edges) → return unreachable error
+- Cab at **same node** as passenger (0 hops) → instant dispatch
+- **Rapid consecutive dispatches** (queue draining fast)
+- **All cabs dispatched** → surge triggers at 1.5x, then 2.0x
+- **Complete all rides** → all cabs return to IDLE, ready queue refills
+- **Invalid state transition** (IDLE → EN_ROUTE directly) → raise error with message
+- **Duplicate dispatch** attempt on same cab → mutual exclusion blocks it
+
+---
+
+## ✅ Verification
+
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test suites
-pytest tests/test_graph.py -v        # BFS/DFS correctness
-pytest tests/test_cab_manager.py -v  # State machine transitions
-pytest tests/test_dispatcher.py -v   # Dispatch logic
+pytest tests/ -v                # All tests
+python -m backend.benchmark     # BFS vs brute-force numbers
+python -m backend.app           # Start server → http://localhost:5000
 ```
 
-### Manual Verification
-1. **Graph correctness**: Verify BFS finds shortest-hop cab on known graph
-2. **State machine**: Verify illegal transitions are rejected (e.g., IDLE → EN_ROUTE)
-3. **Benchmark**: Confirm BFS outperforms brute-force on 500-node graph
-4. **Surge pricing**: Dispatch >60% of cabs and verify surge triggers
-5. **Dashboard**: Visual verification of graph animation, cab states, and live logs
-
-### Demo Script for Judges
-1. Show the city graph with all cabs in IDLE state
-2. Trigger 3 ride requests — show BFS finding nearest cab with wave animation
-3. Show state transitions in real-time on the fleet panel
-4. Trigger enough rides to activate surge pricing
-5. Run benchmark comparison — show the performance table
-6. Show DFS route exploration for a specific cab-passenger pair
-
----
-
-## 🏆 Hackathon Winning Strategy
-
-> [!TIP]
-> **What judges look for:**
-> 1. **Visual wow factor** — The animated graph with BFS wave ripples and cab state transitions will stand out
-> 2. **Clear algorithm understanding** — The BFS vs brute-force benchmark with real numbers proves you understand WHY BFS is better
-> 3. **OS concepts integration** — State machine with transition logging shows process management knowledge
-> 4. **Completeness** — All deliverables + both bonus challenges implemented
-> 5. **Live demo** — Real-time dashboard running in browser beats static terminal output every time
-
----
-
-## Open Questions
-
-> [!IMPORTANT]
-> 1. **Language preference**: The plan uses **Python** (Flask backend + vanilla JS frontend). The problem statement allows Python/Java/C++. Should we stick with Python?
-> 2. **Graph type**: Should edges be **weighted** (distance-based) or **unweighted** (hop-based)? The problem says "shortest hops" suggesting unweighted, but weighted adds realism.
-> 3. **Visualization scope**: The plan includes a full web dashboard with canvas animations. If time is tight, we can fall back to a terminal-based output. Preference?
-> 4. **Team size**: Are you working solo or with a team? This affects how we parallelize the work.
+### Demo Flow (5 minutes)
+1. Show city graph with all cabs IDLE (green dots)
+2. Dispatch 3 rides — see BFS wave, cab turns orange, process table updates
+3. Show state transition log (NEW→IDLE→DISPATCHED→EN_ROUTE)
+4. Dispatch enough to trigger surge pricing (>60%)
+5. Complete rides — cabs return to IDLE
+6. Run benchmark — show BFS vs brute-force timing table
+7. Show DFS alternative routes for a specific dispatch
+8. Try invalid transition — show error handling
