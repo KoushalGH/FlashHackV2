@@ -53,12 +53,21 @@ const WS = (() => {
 
             // Real-time events from backend
             socket.on('state_change', (data) => {
-                App.addLogEntry('STATE', `${data.name || 'Cab-' + data.pid}: ${data.old} → ${data.new}`, 'state');
+                // Backend emits: {pid, old_state, new_state, reason, timestamp}
+                const cabName = data.name || `Cab-${String(data.pid).padStart(2, '0')}`;
+                const oldState = data.old_state || data.old || '?';
+                const newState = data.new_state || data.new || '?';
+                App.addLogEntry('STATE', `${cabName}: ${oldState} → ${newState}`, 'state');
                 refreshCabs();
             });
 
             socket.on('dispatch_event', (data) => {
-                App.addLogEntry('DISPATCH', `${data.cab.name} dispatched via ${data.method.toUpperCase()}`, 'dispatch');
+                // Backend cab dict has no 'name' field — generate it from pid
+                const cabName = (data.cab && data.cab.name)
+                    ? data.cab.name
+                    : `Cab-${String(data.cab && data.cab.pid || '?').padStart(2, '0')}`;
+                const method = (data.method || 'bfs').toUpperCase();
+                App.addLogEntry('DISPATCH', `${cabName} dispatched via ${method}`, 'dispatch');
                 if (data.route) GraphViz.showRoute(data.route);
                 refreshCabs();
             });
@@ -69,16 +78,19 @@ const WS = (() => {
 
             socket.on('log_entry', (data) => {
                 const typeMap = {
-                    'RIDE_REQUEST': 'dispatch',
-                    'CAB_DISPATCHED': 'dispatch',
-                    'STATE_TRANSITION': 'state',
-                    'ROUTE_FOUND': 'route',
+                    'RIDE_REQUEST':    'dispatch',
+                    'CAB_DISPATCHED':  'dispatch',
+                    'STATE_TRANSITION':'state',
+                    'ROUTE_FOUND':     'route',
                     'SURGE_TRIGGERED': 'surge',
-                    'ERROR': 'error',
-                    'SYSTEM': 'system',
-                    'BENCHMARK': 'route'
+                    'SYSTEM_ERROR':    'error',
+                    'ERROR':           'error',
+                    'SYSTEM':          'system',
+                    'BENCHMARK':       'route'
                 };
-                App.addLogEntry(data.event, data.message, typeMap[data.event] || 'system');
+                // Backend sends: {event, details} — NOT {event, message}
+                const msg = data.details || data.message || '—';
+                App.addLogEntry(data.event, msg, typeMap[data.event] || 'system');
             });
 
         } catch (err) {
@@ -127,12 +139,17 @@ const WS = (() => {
             // Clear existing options except the placeholder
             while (select.options.length > 1) select.remove(1);
 
+            // Sort numerically by node ID (not alphabetically)
             data.nodes
-                .sort((a, b) => a.name.localeCompare(b.name))
+                .sort((a, b) => a.id - b.id)
                 .forEach(node => {
                     const opt = document.createElement('option');
                     opt.value = node.id;
-                    opt.textContent = `[${node.id}] ${node.name}`;
+                    // Use real names from StatePanel, fallback to backend name
+                    const realName = (StatePanel.NODE_NAMES && StatePanel.NODE_NAMES[node.id])
+                        ? StatePanel.NODE_NAMES[node.id]
+                        : node.name;
+                    opt.textContent = `[${node.id}] ${realName}`;
                     select.appendChild(opt);
                 });
         } catch (err) {

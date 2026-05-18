@@ -16,8 +16,9 @@ const App = (() => {
         if (!select) return;
 
         const nodes = StatePanel.getNodeNames();
+        // Sort numerically by node ID (0, 1, 2 ... 24)
         Object.entries(nodes)
-            .sort((a, b) => a[1].localeCompare(b[1]))
+            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
             .forEach(([id, name]) => {
                 const opt = document.createElement('option');
                 opt.value = id;
@@ -51,18 +52,29 @@ const App = (() => {
             result = await WS.dispatch(passengerNode, method);
 
             if (result && !result.error) {
+                // Normalize: backend returns cab_pid, frontend built dispatch returns cab.pid
+                const cabPid  = result.cab ? result.cab.pid : result.cab_pid;
+                const cabName = (result.cab && result.cab.name)
+                    ? result.cab.name
+                    : `Cab-${String(cabPid).padStart(2, '0')}`;
+                // Use resolvedMethod to avoid shadowing the outer `method` parameter
+                const resolvedMethod = result.method || method;
+
+                // Attach normalized fields so showDispatchResult can use them
+                result._cabName = cabName;
+                result._method  = resolvedMethod;
+
                 showDispatchResult(result);
 
-                // Log state transitions from the result
                 addLogEntry('STATE',
-                    `Cab-${String(result.cab.pid).padStart(2,'0')}: IDLE → DISPATCHED → EN_ROUTE`,
+                    `${cabName}: IDLE → DISPATCHED → EN_ROUTE`,
                     'state');
                 addLogEntry('DISPATCH',
-                    `${result.cab.name} dispatched via ${method.toUpperCase()} — ${result.hops} hops, ${result.time_ms}ms`,
+                    `${cabName} dispatched via ${resolvedMethod.toUpperCase()} — ${result.hops} hops, ${parseFloat(result.time_ms).toFixed(4)}ms`,
                     'dispatch');
 
                 // Flash the dispatched cab on graph
-                if (result.cab.pid) GraphViz.flashCab(result.cab.pid);
+                if (cabPid) GraphViz.flashCab(cabPid);
 
                 if (result.surge && result.surge.active) {
                     addLogEntry('SURGE',
@@ -147,15 +159,22 @@ const App = (() => {
         }
 
         panel.style.display = 'block';
+        // Use normalized fields if available (set during handleDispatch)
+        const cabName = result._cabName || (result.cab && result.cab.name)
+            ? (result._cabName || result.cab.name)
+            : `Cab-${String((result.cab && result.cab.pid) || result.cab_pid || '?').padStart(2,'0')}`;
+        const dispMethod = result._method || result.method || 'BFS';
+
         panel.className = 'dispatch-result';
         void panel.offsetWidth;
         panel.className = 'dispatch-result show';
-        document.getElementById('result-cab').textContent = result.cab.name;
-        document.getElementById('result-method').textContent = result.method.toUpperCase();
+        document.getElementById('result-cab').textContent = cabName;
+        document.getElementById('result-method').textContent = dispMethod.toUpperCase();
         document.getElementById('result-hops').textContent = `${result.hops} hops`;
         document.getElementById('result-time').textContent = `${result.time_ms} ms`;
 
-        const routeNames = result.route.map(n => {
+        const routeNodeIds = result.route || [];
+        const routeNames = routeNodeIds.map(n => {
             const name = StatePanel.NODE_NAMES[n];
             return name ? name : `N${n}`;
         });

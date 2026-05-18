@@ -42,7 +42,7 @@ const StatePanel = (() => {
         const container = document.getElementById('process-table-container');
         if (!container) return;
 
-        const stateClass = (state) => state.toLowerCase().replace('_', '_');
+        const stateClass = (state) => (state || '').toLowerCase().replace('_', '_');
 
         let html = `
             <table class="process-table">
@@ -59,17 +59,23 @@ const StatePanel = (() => {
         `;
 
         currentCabs.forEach(cab => {
-            const nodeName = NODE_NAMES[cab.node] || `Node ${cab.node}`;
-            const rideInfo = cab.ride
-                ? `→ ${NODE_NAMES[cab.ride.passenger_node] || `Node ${cab.ride.passenger_node}`}`
+            // Normalize backend format: current_node vs node, assigned_ride vs ride
+            const nodeId   = cab.current_node !== undefined ? cab.current_node : cab.node;
+            const rideData = cab.assigned_ride !== undefined ? cab.assigned_ride : cab.ride;
+            const cabName  = cab.name || `Cab-${String(cab.pid).padStart(2, '0')}`;
+            const state    = cab.state || 'IDLE';
+
+            const nodeName = NODE_NAMES[nodeId] !== undefined ? NODE_NAMES[nodeId] : `Node ${nodeId}`;
+            const rideInfo = rideData
+                ? `→ ${NODE_NAMES[rideData.passenger_node] || `Node ${rideData.passenger_node}`}`
                 : '—';
-            const sc = stateClass(cab.state);
+            const sc = stateClass(state);
 
             html += `
                 <tr data-pid="${cab.pid}" class="cab-row">
                     <td class="pid-cell">P${String(cab.pid).padStart(2, '0')}</td>
-                    <td>${cab.name}</td>
-                    <td><span class="state-badge ${sc}">${cab.state}</span></td>
+                    <td>${cabName}</td>
+                    <td><span class="state-badge ${sc}">${state}</span></td>
                     <td title="${nodeName}">${nodeName}</td>
                     <td>${rideInfo}</td>
                 </tr>
@@ -87,8 +93,9 @@ const StatePanel = (() => {
      */
     function updateFleetStats(cabs) {
         const total = cabs.length;
-        const idle = cabs.filter(c => c.state === 'IDLE').length;
-        const active = cabs.filter(c => ['DISPATCHED', 'EN_ROUTE'].includes(c.state)).length;
+        // Count using both field formats (backend: state string, mock: state string)
+        const idle = cabs.filter(c => (c.state || '') === 'IDLE').length;
+        const active = cabs.filter(c => ['DISPATCHED', 'EN_ROUTE'].includes(c.state || '')).length;
 
         const elTotal = document.getElementById('stat-total');
         const elIdle = document.getElementById('stat-idle');
