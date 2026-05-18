@@ -48,3 +48,11 @@ htmlcov/
 *.bak
 *.tmp
 .gemini/
+
+# Flask & Backend
+instance/
+.webassets-cache
+.flaskenv
+
+# Frontend
+node_modules/
