@@ -1,138 +1,152 @@
-# 🚕 CabGrid — Real-Time Cab Dispatch Optimizer
+# CabGrid — Real-Time Cab Dispatch Optimizer
 
-> **Domain:** Transport & Logistics  
-> **Algorithms:** BFS/DFS & Brute Force Comparison  
-> **OS Concepts:** Process State Management  
+A graph-based cab dispatch system that demonstrates the practical superiority of BFS over brute-force approaches for nearest-resource allocation. Built on OS process scheduling principles where each cab operates as a managed process with strict state lifecycle control.
 
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Flask](https://img.shields.io/badge/Flask-3.0-000000?style=for-the-badge&logo=flask&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-3.0-000000?style=flat-square&logo=flask&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
-## 🎯 Problem Statement
+---
 
-A cab aggregator startup struggles with dispatch logic — brute-forcing through all available cabs works fine with 10 cabs but **completely chokes at 500**. CabGrid implements a smarter **graph traversal-based approach** using BFS to find the nearest available cab across a city modelled as a graph.
+## Problem Statement
 
-## 🧠 Core Concepts
+A cab aggregator startup uses brute-force dispatch — computing the distance from every available cab to every passenger request. This approach is acceptable at small scale but becomes a bottleneck as fleet size grows. At 500 cabs, brute-force dispatch runs 16,000 times slower than a BFS-based approach on the same graph.
 
-### DAA (Design & Analysis of Algorithms)
-| Algorithm | Purpose | Complexity |
-|-----------|---------|-----------|
-| **BFS** | Nearest cab search (shortest hops) | O(V + E) |
-| **DFS** | Route exploration from cab → passenger | O(V + E) |
-| **Brute Force** | Baseline comparison (compute distance to ALL cabs) | O(C × (V + E)) |
+CabGrid replaces brute-force dispatch with a BFS traversal over a city modeled as an adjacency-list graph, and restricts the search to only IDLE cabs using an OS-style ready queue.
 
-### OS (Operating Systems)
-Each cab is modeled as a **process** with defined states:
+---
+
+## Algorithms
+
+| Algorithm | Role | Time Complexity |
+|-----------|------|-----------------|
+| BFS | Finds the nearest IDLE cab from the passenger node (shortest hops) | O(V + E) |
+| DFS | Explores alternate pickup routes from a cab to a passenger | O(V + E) |
+| Brute Force | Computes shortest path from every cab to passenger — baseline comparison | O(C x (V + E)) |
+
+BFS terminates as soon as the first IDLE cab is found. Brute force exhausts all candidates before selecting the minimum. The difference is measurable at scale.
+
+---
+
+## OS Integration
+
+Each cab is represented as a Process Control Block (PCB) with an enforced state machine. State transitions are validated and logged, illegal transitions raise an exception, and the ready queue is the only source for dispatch candidates.
 
 ```
-┌──────┐     ┌────────────┐     ┌──────────┐     ┌───────────┐
-│ IDLE │ ──→ │ DISPATCHED │ ──→ │ EN_ROUTE │ ──→ │ COMPLETED │
-│(Ready)│     │ (Running)  │     │ (Waiting)│     │(Terminated)│
-└──────┘     └────────────┘     └──────────┘     └───────────┘
-    ↑                                                   │
-    └───────────────────────────────────────────────────┘
+REGISTERED --> IDLE --> DISPATCHED --> EN_ROUTE --> COMPLETED --> IDLE
+               (Ready)   (Running)      (Waiting)  (Terminated)
 ```
 
-## 🔑 Design Decisions
+**Ready Queue:** BFS only searches cabs present in the ready queue. Once a cab is dispatched, it is immediately removed from the queue. This prevents double-booking and mirrors OS scheduler behavior.
 
-1. **"Why does BFS only search the ready queue?"** — Like an OS scheduler only considers READY processes, our dispatcher only considers IDLE cabs. Makes BFS faster AND semantically correct.
-2. **"Why a PCB per cab?"** — Each cab carries state, context (ride, route), and history. Mirrors PCBs in operating systems. Makes the system debuggable — inspect any cab's full lifecycle.
-3. **"Why validate state transitions?"** — Prevents double-dispatching (like an OS can't schedule an already-running process). Real mutual exclusion on cab resources.
-4. **"Why separate ready queue?"** — O(1) queue management vs O(n) scanning all cabs. Same reason OS maintains a ready queue instead of scanning the full process table.
+**Mutual Exclusion:** A threading lock (dispatch_lock) wraps the dispatch critical section. Concurrent booking requests cannot read and assign the same cab simultaneously. This is equivalent to a kernel mutex protecting the process scheduler.
 
-## ✨ Features
+**Surge Pricing:** Calculated from the ratio of active to total cabs (the dispatch_engine). Triggers at greater than 60% fleet utilization (1.5x) and greater than 80% (2.0x). The metric is derived directly from the process table state, not a separate tracking variable.
 
-- 🗺️ **City Graph Model** — 25 intersections, 40+ roads as an adjacency list
-- ⚡ **BFS Dispatch** — Find nearest available cab in minimal hops
-- 🔍 **DFS Route Explorer** — Discover all possible pickup routes
-- 🔄 **Process State Machine** — Full cab lifecycle management with transition logging
-- 📊 **BFS vs Brute Force Benchmark** — Performance comparison on 25–500 node graphs
-- 💰 **Surge Pricing** — Auto-triggers when >60% cabs are dispatched
-- 🖥️ **Live Web Dashboard** — Real-time graph visualization with animated dispatch
+**Auto-Completion Timer:** After dispatch, a background thread simulates ride travel time based on hop count. Cabs with fewer hops complete first and return to the ready queue sooner — analogous to shorter CPU bursts being scheduled first in an SJF scheduler.
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
-- Python 3.10+
-- pip
+## Design Decisions
 
-### Installation
-```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/FlashHackV2.git
-cd FlashHackV2
+**Why does BFS only search the ready queue?**
+An OS scheduler only considers processes in the READY state. Dispatching from the full process table would require filtering by state on every request — the ready queue makes this O(1).
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+**Why a PCB per cab?**
+State, assigned ride, current node, and state history are all stored per cab. This makes the system fully inspectable — any cab's lifecycle can be traced end to end, the same way a process's PCB records its execution history.
 
-# Install dependencies
-pip install -r requirements.txt
-```
+**Why validate state transitions?**
+Validation prevents logical errors such as dispatching a cab that is already en route, or marking a registered cab as completed. Each transition is checked against a valid transition map before execution.
 
-### Run the Application
-```bash
-# Start the server
-python -m backend.app
+**Why a separate ready queue instead of filtering the process list?**
+Filtering the entire process list on every dispatch is O(n). A set-based ready queue reduces dispatch eligibility checks to O(1) membership lookup.
 
-# Open in browser
-# http://localhost:5000
-```
+---
 
-### Run Tests
-```bash
-pytest tests/ -v
-```
+## Benchmark Results
 
-### Run Benchmark
-```bash
-python -m backend.benchmark
-```
+Live results from `python -m backend.benchmark`:
 
-## 📁 Project Structure
+| Nodes | Cabs | BFS Time | Brute Force Time | Speedup |
+|-------|------|----------|------------------|---------|
+| 25    | 10   | 0.002 ms | 0.082 ms         | 41x     |
+| 100   | 50   | 0.002 ms | 0.915 ms         | 538x    |
+| 500   | 200  | 0.003 ms | 40.08 ms         | 16,104x |
+
+BFS terminates at the first cab found. Brute force runs a full BFS from every cab before selecting the minimum. The gap compounds with fleet size.
+
+---
+
+## Project Structure
 
 ```
 FlashHackV2/
 ├── backend/
-│   ├── app.py                   # Flask + WebSocket server
-│   ├── city_graph.py            # City graph, BFS, DFS algorithms
-│   ├── cab_process.py           # Cab process state machine (PCB)
-│   ├── scheduler.py             # OS-style cab scheduler & ready queue
-│   ├── dispatcher.py            # Dispatch logic (BFS + Brute Force)
-│   ├── benchmark.py             # Performance benchmarking
-│   ├── surge_pricing.py         # Surge pricing engine
-│   └── event_logger.py          # Structured event logger
+│   ├── app.py              Flask server with WebSocket support and dispatch mutex
+│   ├── city_graph.py       25-node city graph, BFS and DFS implementations
+│   ├── cab_process.py      Cab PCB, state machine, transition validation
+│   ├── scheduler.py        Ready queue, process table, lifecycle management
+│   ├── dispatcher.py       Orchestrates BFS and brute-force dispatch
+│   ├── benchmark.py        Timed comparison across 25, 100, and 500 node graphs
+│   ├── surge_pricing.py    Fleet utilization-based surge multiplier
+│   └── event_logger.py     Structured event log for all dispatch activity
 ├── frontend/
-│   ├── index.html               # Dashboard UI
-│   ├── css/style.css            # Dark-mode styling
-│   └── js/                      # Client-side logic
-├── tests/                       # pytest test suite
-├── docs/                        # Documentation
-├── requirements.txt
-└── README.md
+│   ├── index.html          Dashboard layout
+│   ├── css/style.css       Dark-mode interface
+│   └── js/
+│       ├── app.js          Dispatch controls, event log, benchmark display
+│       ├── graph_viz.js    Canvas graph renderer with BFS wave and route animation
+│       ├── state_panel.js  Process table with live state badges
+│       └── websocket.js    Socket.IO client and REST API wrappers
+├── tests/
+│   ├── test_graph.py       Graph initialization, BFS correctness, DFS routes
+│   ├── test_cab_process.py PCB initialization, valid and invalid state transitions
+│   └── test_scheduler.py   Fleet initialization and full dispatch lifecycle
+├── docs/
+│   └── architecture.md     System component overview
+└── requirements.txt
 ```
 
-## 📊 Benchmark Results
+---
 
-| Nodes | Cabs | BFS Time | Brute Force Time | Speedup |
-|-------|------|----------|-----------------|---------|
-| 25    | 10   | ~0.1ms   | ~0.5ms          | ~5x     |
-| 100   | 50   | ~0.3ms   | ~9ms            | ~30x    |
-| 500   | 200  | ~1.2ms   | ~200ms          | ~160x   |
+## Setup and Usage
 
-*BFS stops at the first cab found; Brute Force computes distance to every cab.*
+**Requirements:** Python 3.10 or later
 
-## 🏗️ Built With
+```bash
+git clone https://github.com/KoushalGH/FlashHackV2.git
+cd FlashHackV2
+pip install -r requirements.txt
+```
 
-- **Python** — Core logic and algorithms
-- **Flask + Flask-SocketIO** — Real-time web server
-- **HTML5 Canvas** — Graph visualization
-- **Vanilla CSS/JS** — Premium dark-mode dashboard
+**Start the server:**
+```bash
+python -m backend.app
+```
 
-## 👥 Team
+Open `http://localhost:5000` in a browser. The dashboard connects automatically via WebSocket.
 
-- **Team Name**: FlashHack V2
+**Run tests:**
+```bash
+pytest tests/ -v
+```
 
-## 📄 License
+**Run benchmark:**
+```bash
+python -m backend.benchmark
+```
 
-This project is licensed under the MIT License.
+---
+
+## Tech Stack
+
+- Python 3.12 — Core algorithms and server logic
+- Flask and Flask-SocketIO — REST API and real-time WebSocket events
+- HTML5 Canvas — Interactive city graph visualization
+- Vanilla JavaScript and CSS — Dashboard, animations, and state rendering
+
+---
+
+## Team
+
+FlashHack V2 — Hackathon submission
