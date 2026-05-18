@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="CabGrid — Real-Time Cab Dispatch Optimizer using BFS/DFS graph traversal and OS process state management">
+    <title>CabGrid — Real-Time Cab Dispatch Optimizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header id="app-header">
+        <div class="header-left">
+            <div class="logo-icon">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <rect x="2" y="8" width="24" height="14" rx="3" stroke="url(#logoGrad)" stroke-width="2"/>
+                    <circle cx="9" cy="22" r="2.5" stroke="url(#logoGrad)" stroke-width="1.5"/>
+                    <circle cx="19" cy="22" r="2.5" stroke="url(#logoGrad)" stroke-width="1.5"/>
+                    <rect x="6" y="11" width="6" height="5" rx="1" fill="url(#logoGrad)" opacity="0.6"/>
+                    <rect x="14" y="11" width="6" height="5" rx="1" fill="url(#logoGrad)" opacity="0.4"/>
+                    <line x1="4" y1="8" x2="8" y2="3" stroke="url(#logoGrad)" stroke-width="1.5" stroke-linecap="round"/>
+                    <defs>
+                        <linearGradient id="logoGrad" x1="0" y1="0" x2="28" y2="28">
+                            <stop stop-color="#00ff88"/>
+                            <stop offset="1" stop-color="#4ecdc4"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <h1>CabGrid</h1>
+            <span class="header-badge">DISPATCH OPTIMIZER</span>
+        </div>
+        <div class="header-right">
+            <div class="status-indicator" id="connection-status">
+                <span class="status-dot offline"></span>
+                <span class="status-text">Offline</span>
+            </div>
+            <div class="surge-indicator" id="surge-banner" style="display: none;">
+                <span class="surge-icon">⚡</span>
+                <span class="surge-text">SURGE 1.5x</span>
+            </div>
+            <div class="fleet-stats" id="fleet-stats">
+                <div class="stat">
+                    <span class="stat-value" id="stat-total">0</span>
+                    <span class="stat-label">Fleet</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value idle-color" id="stat-idle">0</span>
+                    <span class="stat-label">Idle</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value dispatched-color" id="stat-dispatched">0</span>
+                    <span class="stat-label">Active</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Grid -->
+    <main id="dashboard">
+        <!-- Panel 1: City Graph -->
+        <section class="panel" id="graph-panel">
+            <div class="panel-header">
+                <h2>
+                    <span class="panel-icon">🗺️</span>
+                    City Graph
+                </h2>
+                <div class="panel-actions">
+                    <button class="btn-icon" id="btn-reset-view" title="Reset View">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M13.65 2.35a8 8 0 1 0 .35 10.9l-1.2-1a6 6 0 1 1-.28-8.18L11 5.5H15V1.5l-1.35 .85z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-body canvas-container">
+                <canvas id="city-canvas"></canvas>
+                <div class="canvas-overlay" id="canvas-placeholder">
+                    <div class="placeholder-content">
+                        <span class="placeholder-icon">📡</span>
+                        <p>Waiting for graph data...</p>
+                        <span class="placeholder-sub">Connect to backend to visualize the city</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Panel 2: Process Table (Cab Fleet) -->
+        <section class="panel" id="process-panel">
+            <div class="panel-header">
+                <h2>
+                    <span class="panel-icon">🖥️</span>
+                    Process Table
+                </h2>
+                <span class="panel-subtitle">OS Process Control Blocks</span>
+            </div>
+            <div class="panel-body">
+                <div class="process-table-container" id="process-table-container">
+                    <!-- Populated by state_panel.js -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Panel 3: Dispatch Control -->
+        <section class="panel" id="dispatch-panel">
+            <div class="panel-header">
+                <h2>
+                    <span class="panel-icon">🚀</span>
+                    Dispatch Control
+                </h2>
+            </div>
+            <div class="panel-body">
+                <!-- Ride Request Form -->
+                <div class="dispatch-form">
+                    <div class="form-group">
+                        <label for="passenger-node">Passenger Pickup Node</label>
+                        <select id="passenger-node" class="form-select">
+                            <option value="" disabled selected>Select intersection...</option>
+                        </select>
+                    </div>
+                    <div class="dispatch-buttons">
+                        <button class="btn btn-primary" id="btn-dispatch-bfs">
+                            <span class="btn-icon-left">⚡</span>
+                            Dispatch (BFS)
+                        </button>
+                        <button class="btn btn-secondary" id="btn-dispatch-brute">
+                            <span class="btn-icon-left">🔄</span>
+                            Dispatch (Brute Force)
+                        </button>
+                    </div>
+                    <button class="btn btn-outline" id="btn-benchmark">
+                        <span class="btn-icon-left">📊</span>
+                        Run Benchmark
+                    </button>
+                    <button class="btn btn-complete" id="btn-complete-all">
+                        <span class="btn-icon-left">✅</span>
+                        Complete All Rides
+                    </button>
+                </div>
+
+                <!-- Dispatch Result -->
+                <div class="dispatch-result" id="dispatch-result" style="display: none;">
+                    <h3>Dispatch Result</h3>
+                    <div class="result-grid">
+                        <div class="result-item">
+                            <span class="result-label">Cab</span>
+                            <span class="result-value" id="result-cab">—</span>
+                        </div>
+                        <div class="result-item">
+                            <span class="result-label">Method</span>
+                            <span class="result-value" id="result-method">—</span>
+                        </div>
+                        <div class="result-item">
+                            <span class="result-label">Hops</span>
+                            <span class="result-value" id="result-hops">—</span>
+                        </div>
+                        <div class="result-item">
+                            <span class="result-label">Time</span>
+                            <span class="result-value" id="result-time">—</span>
+                        </div>
+                        <div class="result-item full-width">
+                            <span class="result-label">Route</span>
+                            <span class="result-value route-display" id="result-route">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Benchmark Result -->
+                <div class="benchmark-result" id="benchmark-result" style="display: none;">
+                    <h3>📊 BFS vs Brute Force Benchmark</h3>
+                    <div class="benchmark-table-container" id="benchmark-table">
+                        <!-- Populated by app.js -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Panel 4: Event Log -->
+        <section class="panel" id="log-panel">
+            <div class="panel-header">
+                <h2>
+                    <span class="panel-icon">📋</span>
+                    Event Log
+                </h2>
+                <div class="panel-actions">
+                    <button class="btn-icon" id="btn-clear-log" title="Clear Log">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                            <path d="M5.5 1v-.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5V1h3.5a.5.5 0 0 1 0 1H1.5a.5.5 0 0 1 0-1h4zm-3 3a.5.5 0 0 1 .5.5v7a1.5 1.5 0 0 0 1.5 1.5h5A1.5 1.5 0 0 0 11 11.5v-7a.5.5 0 0 1 1 0v7A2.5 2.5 0 0 1 9.5 14h-5A2.5 2.5 0 0 1 2 11.5v-7a.5.5 0 0 1 .5-.5z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="log-container" id="log-container">
+                    <div class="log-entry log-system">
+                        <span class="log-time">--:--:--</span>
+                        <span class="log-badge system">SYSTEM</span>
+                        <span class="log-message">CabGrid initialized. Waiting for connection...</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- State Transition Diagram (floating) -->
+    <div class="state-diagram-toggle" id="state-diagram-toggle" title="Show State Diagram">
+        <span>📐</span>
+    </div>
+    <div class="state-diagram-overlay" id="state-diagram-overlay" style="display: none;">
+        <div class="state-diagram-card">
+            <div class="state-diagram-header">
+                <h3>OS Process State Diagram</h3>
+                <button class="btn-close" id="btn-close-diagram">&times;</button>
+            </div>
+            <div class="state-diagram-body">
+                <div class="state-flow">
+                    <div class="state-node new">NEW<br><small>Registered</small></div>
+                    <div class="state-arrow">→</div>
+                    <div class="state-node idle">IDLE<br><small>Ready</small></div>
+                    <div class="state-arrow">→</div>
+                    <div class="state-node dispatched">DISPATCHED<br><small>Running</small></div>
+                    <div class="state-arrow">→</div>
+                    <div class="state-node enroute">EN_ROUTE<br><small>Waiting</small></div>
+                    <div class="state-arrow">→</div>
+                    <div class="state-node completed">COMPLETED<br><small>Terminated</small></div>
+                </div>
+                <div class="state-return-arrow">
+                    <span>↩ Returns to IDLE (Ready Queue)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/state_panel.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
