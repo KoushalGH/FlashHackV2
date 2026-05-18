@@ -118,7 +118,13 @@
                     <div class="form-group">
                         <label for="passenger-node">Passenger Pickup Node</label>
                         <select id="passenger-node" class="form-select">
-                            <option value="" disabled selected>Select intersection...</option>
+                            <option value="" disabled selected>Select pickup intersection...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="destination-node">🏁 Destination Node</label>
+                        <select id="destination-node" class="form-select">
+                            <option value="" disabled selected>Select destination...</option>
                         </select>
                     </div>
                     <div class="dispatch-buttons">
@@ -135,9 +141,9 @@
                         <span class="btn-icon-left">📊</span>
                         Run Benchmark
                     </button>
-                    <button class="btn btn-complete" id="btn-complete-all">
-                        <span class="btn-icon-left">✅</span>
-                        Complete All Rides
+                    <button class="btn btn-complete" id="btn-complete-all" title="Emergency override — rides auto-complete on their own">
+                        <span class="btn-icon-left">🛑</span>
+                        Emergency Override
                     </button>
                 </div>
 
@@ -164,6 +170,14 @@
                         <div class="result-item full-width">
                             <span class="result-label">Route</span>
                             <span class="result-value route-display" id="result-route">—</span>
+                        </div>
+                        <div class="result-item full-width">
+                            <span class="result-label">🏁 Destination</span>
+                            <span class="result-value" id="result-destination" style="color: var(--enroute);">—</span>
+                        </div>
+                        <div class="result-item full-width">
+                            <span class="result-label">⏱ Auto-completes in</span>
+                            <span class="result-value" id="result-timer" style="color: var(--warning);">—</span>
                         </div>
                     </div>
                 </div>

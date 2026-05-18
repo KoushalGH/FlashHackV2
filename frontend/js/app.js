@@ -12,19 +12,26 @@ const App = (() => {
      * Populate the passenger node dropdown from node names.
      */
     function populateNodeDropdown() {
-        const select = document.getElementById('passenger-node');
-        if (!select) return;
+        const selPickup = document.getElementById('passenger-node');
+        const selDest   = document.getElementById('destination-node');
 
         const nodes = StatePanel.getNodeNames();
-        // Sort numerically by node ID (0, 1, 2 ... 24)
-        Object.entries(nodes)
-            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-            .forEach(([id, name]) => {
+        const sorted = Object.entries(nodes).sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+
+        sorted.forEach(([id, name]) => {
+            const label = `[${id}] ${name}`;
+
+            if (selPickup) {
                 const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = `[${id}] ${name}`;
-                select.appendChild(opt);
-            });
+                opt.value = id; opt.textContent = label;
+                selPickup.appendChild(opt);
+            }
+            if (selDest) {
+                const opt = document.createElement('option');
+                opt.value = id; opt.textContent = label;
+                selDest.appendChild(opt);
+            }
+        });
     }
 
     /**
@@ -32,24 +39,28 @@ const App = (() => {
      */
     async function handleDispatch(method) {
         const nodeSelect = document.getElementById('passenger-node');
+        const destSelect = document.getElementById('destination-node');
         const passengerNode = parseInt(nodeSelect.value);
+        const destinationNode = destSelect && destSelect.value !== '' ? parseInt(destSelect.value) : null;
 
         if (isNaN(passengerNode)) {
             addLogEntry('ERROR', 'No pickup node selected', 'error');
             return;
         }
 
-        const nodeName = StatePanel.NODE_NAMES[passengerNode] || `Node ${passengerNode}`;
-        addLogEntry('RIDE_REQUEST', `Passenger at ${nodeName} (Node ${passengerNode})`, 'dispatch');
+        const pickupName = StatePanel.NODE_NAMES[passengerNode] || `Node ${passengerNode}`;
+        const destName   = destinationNode !== null
+            ? (StatePanel.NODE_NAMES[destinationNode] || `Node ${destinationNode}`)
+            : pickupName;
+        addLogEntry('RIDE_REQUEST', `Pickup: ${pickupName} → Destination: ${destName}`, 'dispatch');
 
-        // Disable buttons during dispatch
         setDispatchButtonsEnabled(false);
 
         let result;
 
         if (WS.isConnected()) {
             // ===== LIVE API DISPATCH =====
-            result = await WS.dispatch(passengerNode, method);
+            result = await WS.dispatch(passengerNode, method, destinationNode);
 
             if (result && !result.error) {
                 // Normalize: backend returns cab_pid, frontend built dispatch returns cab.pid
@@ -159,7 +170,6 @@ const App = (() => {
         }
 
         panel.style.display = 'block';
-        // Use normalized fields if available (set during handleDispatch)
         const cabName = result._cabName || (result.cab && result.cab.name)
             ? (result._cabName || result.cab.name)
             : `Cab-${String((result.cab && result.cab.pid) || result.cab_pid || '?').padStart(2,'0')}`;
@@ -171,7 +181,7 @@ const App = (() => {
         document.getElementById('result-cab').textContent = cabName;
         document.getElementById('result-method').textContent = dispMethod.toUpperCase();
         document.getElementById('result-hops').textContent = `${result.hops} hops`;
-        document.getElementById('result-time').textContent = `${result.time_ms} ms`;
+        document.getElementById('result-time').textContent = `${parseFloat(result.time_ms).toFixed(4)} ms`;
 
         const routeNodeIds = result.route || [];
         const routeNames = routeNodeIds.map(n => {
@@ -180,7 +190,23 @@ const App = (() => {
         });
         document.getElementById('result-route').textContent = routeNames.join(' → ');
 
-        // Animate result panel
+        // Show destination
+        const destEl = document.getElementById('result-destination');
+        if (destEl) {
+            const destId = result.destination_node;
+            destEl.textContent = destId !== undefined
+                ? (StatePanel.NODE_NAMES[destId] || `Node ${destId}`)
+                : '—';
+        }
+
+        // Show auto-complete countdown
+        const timerEl = document.getElementById('result-timer');
+        if (timerEl && result.auto_complete_secs) {
+            timerEl.textContent = `~${result.auto_complete_secs}s (shortest ride completes first)`;
+        } else if (timerEl) {
+            timerEl.textContent = '—';
+        }
+
         panel.style.animation = 'none';
         panel.offsetHeight;
         panel.style.animation = 'logSlide 0.3s ease-out';

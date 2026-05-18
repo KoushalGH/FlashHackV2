@@ -62,48 +62,91 @@ def get_surge():
 @app.route("/api/dispatch", methods=["POST"])
 def dispatch_ride():
     data = request.json
-    passenger_node = int(data.get("passenger_node", 0))
+    passenger_node  = int(data.get("passenger_node", 0))
+    destination_node = int(data.get("destination_node", passenger_node))  # default: drop at pickup
     method = data.get("method", "bfs")
-    
-    # Store old state for surge comparison
+
     old_surge = dispatcher.surge_engine.calculate_surge(
-        len(dispatcher.scheduler.process_list), 
+        len(dispatcher.scheduler.process_list),
         dispatcher.scheduler.get_active_count()
     )
-    
+
     result = dispatcher.dispatch_ride(passenger_node, method)
-    
+
     if "error" in result:
         return jsonify(result), 400
-        
+
     pid = result["cab_pid"]
-    cab = dispatcher.scheduler.process_list[pid].to_dict()
-    
-    # Emit events
+    cab_pcb = dispatcher.scheduler.process_list[pid]
+
+    # Store destination in the ride context
+    if cab_pcb.assigned_ride:
+        cab_pcb.assigned_ride["destination_node"] = destination_node
+
+    # Update cab position to passenger_node (cab arrived at pickup)
+    cab_pcb.current_node = passenger_node
+    dispatcher.scheduler.cab_arrived_at_passenger(pid)
+
+    cab = cab_pcb.to_dict()
+    cab["name"] = f"Cab-{pid:02d}"
+
+    # Emit dispatch + state events
     socketio.emit('dispatch_event', {
-        'cab': cab,
-        'passenger_node': passenger_node,
-        'route': result["route"],
-        'method': method
+        'cab': cab, 'passenger_node': passenger_node,
+        'destination_node': destination_node,
+        'route': result["route"], 'method': method
     })
-    
     socketio.emit('state_change', {
-        'pid': pid,
-        'old_state': 'IDLE',
-        'new_state': 'DISPATCHED',
-        'reason': f"Assigned to passenger at node {passenger_node}",
+        'pid': pid, 'old_state': 'IDLE', 'new_state': 'EN_ROUTE',
+        'reason': f"En route to destination node {destination_node}",
         'timestamp': time.time()
     })
-    
+
     new_surge = result["surge"]
     if new_surge != old_surge:
-        socketio.emit('surge_update', {
-            'active': new_surge > 1.0,
-            'multiplier': new_surge
-        })
-        
+        socketio.emit('surge_update', {'active': new_surge > 1.0, 'multiplier': new_surge})
+
+    # ── Auto-completion (OS timer interrupt simulation) ──────────────────
+    # Travel time = (hops + 1) * 3 seconds. Fewest hops = completes first.
+    travel_secs = max(5, (result["hops"] + 1) * 3)
+
+    def _auto_complete(pid, dest_node, delay):
+        time.sleep(delay)
+        with app.app_context():
+            pcb = dispatcher.scheduler.process_list.get(pid)
+            if not pcb or pcb.state.value not in ("EN_ROUTE", "DISPATCHED"):
+                return  # already completed manually
+            try:
+                dispatcher.scheduler.complete_ride(pid, dest_node)
+                pcb.current_node = dest_node   # move cab to destination
+                dispatcher.logger.log("STATE_TRANSITION",
+                    f"Cab P{pid:02d}: EN_ROUTE → COMPLETED → IDLE (auto, dest=node {dest_node})")
+                socketio.emit('state_change', {
+                    'pid': pid, 'old_state': 'EN_ROUTE', 'new_state': 'IDLE',
+                    'reason': f"Ride completed — cab now at node {dest_node}",
+                    'timestamp': time.time()
+                })
+                socketio.emit('ride_completed', {
+                    'pid': pid, 'cab_name': f"Cab-{pid:02d}",
+                    'dest_node': dest_node, 'process_table': dispatcher.scheduler.process_table()
+                })
+                total  = len(dispatcher.scheduler.process_list)
+                active = dispatcher.scheduler.get_active_count()
+                surge  = dispatcher.surge_engine.calculate_surge(total, active)
+                socketio.emit('surge_update', {'active': surge > 1.0, 'multiplier': surge})
+            except Exception as e:
+                dispatcher.logger.log("SYSTEM_ERROR", f"Auto-complete failed for P{pid}: {e}")
+
+    import threading
+    t = threading.Thread(target=_auto_complete, args=(pid, destination_node, travel_secs), daemon=True)
+    t.start()
+    # ─────────────────────────────────────────────────────────────────────
+
     result["process_table"] = dispatcher.scheduler.process_table()
     result["cab"] = cab
+    result["method"] = method
+    result["destination_node"] = destination_node
+    result["auto_complete_secs"] = travel_secs
     return jsonify(result)
 
 @app.route("/api/complete", methods=["POST"])

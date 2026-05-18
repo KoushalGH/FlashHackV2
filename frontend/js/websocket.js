@@ -93,6 +93,20 @@ const WS = (() => {
                 App.addLogEntry(data.event, msg, typeMap[data.event] || 'system');
             });
 
+            // Auto-completion event — cab finished ride, moved to destination
+            socket.on('ride_completed', (data) => {
+                const cabName = data.cab_name || `Cab-${String(data.pid).padStart(2, '0')}`;
+                const nodeName = (StatePanel.NODE_NAMES && StatePanel.NODE_NAMES[data.dest_node])
+                    ? StatePanel.NODE_NAMES[data.dest_node] : `Node ${data.dest_node}`;
+                App.addLogEntry('STATE',
+                    `${cabName}: EN_ROUTE → COMPLETED → IDLE — now at ${nodeName}`,
+                    'state');
+                if (data.process_table) {
+                    StatePanel.render(data.process_table);
+                    GraphViz.setCabs(data.process_table);
+                }
+            });
+
         } catch (err) {
             console.error('[WS] Connection error:', err);
             updateConnectionStatus(false);
@@ -133,25 +147,31 @@ const WS = (() => {
             if (!res.ok) return;
             const data = await res.json();
 
-            const select = document.getElementById('passenger-node');
-            if (!select) return;
+            const selPickup = document.getElementById('passenger-node');
+            const selDest   = document.getElementById('destination-node');
+            if (!selPickup) return;
 
-            // Clear existing options except the placeholder
-            while (select.options.length > 1) select.remove(1);
+            // Clear all except placeholder
+            while (selPickup.options.length > 1) selPickup.remove(1);
+            if (selDest) while (selDest.options.length > 1) selDest.remove(1);
 
             // Sort numerically by node ID (not alphabetically)
-            data.nodes
-                .sort((a, b) => a.id - b.id)
-                .forEach(node => {
-                    const opt = document.createElement('option');
-                    opt.value = node.id;
-                    // Use real names from StatePanel, fallback to backend name
-                    const realName = (StatePanel.NODE_NAMES && StatePanel.NODE_NAMES[node.id])
-                        ? StatePanel.NODE_NAMES[node.id]
-                        : node.name;
-                    opt.textContent = `[${node.id}] ${realName}`;
-                    select.appendChild(opt);
-                });
+            const sorted = [...data.nodes].sort((a, b) => a.id - b.id);
+            sorted.forEach(node => {
+                const realName = (StatePanel.NODE_NAMES && StatePanel.NODE_NAMES[node.id])
+                    ? StatePanel.NODE_NAMES[node.id] : node.name;
+                const label = `[${node.id}] ${realName}`;
+
+                const optP = document.createElement('option');
+                optP.value = node.id; optP.textContent = label;
+                selPickup.appendChild(optP);
+
+                if (selDest) {
+                    const optD = document.createElement('option');
+                    optD.value = node.id; optD.textContent = label;
+                    selDest.appendChild(optD);
+                }
+            });
         } catch (err) {
             // Use mock data from StatePanel if API unavailable
         }
@@ -174,12 +194,20 @@ const WS = (() => {
      * @param {number} passengerNode - The pickup node ID
      * @param {string} method - "bfs" or "brute"
      */
-    async function dispatch(passengerNode, method) {
+    async function dispatch(passengerNode, method, destinationNode) {
         try {
+            const body = {
+                passenger_node: passengerNode,
+                method: method
+            };
+            if (destinationNode !== undefined && destinationNode !== null) {
+                body.destination_node = destinationNode;
+            }
+
             const res = await fetch(`${API_BASE}/api/dispatch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ passenger_node: passengerNode, method: method })
+                body: JSON.stringify(body)
             });
 
             const data = await res.json();
