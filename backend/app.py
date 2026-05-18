@@ -6,6 +6,7 @@ from backend.benchmark import run_benchmark
 from backend.city_graph import CityGraph
 import time
 import os
+import threading
 
 # App Initialization
 app = Flask(__name__, static_folder="../frontend", static_url_path="/")
@@ -14,6 +15,13 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global Dispatcher Instance (10 cabs)
 dispatcher = Dispatcher(fleet_size=10)
+
+# ── OS Concept: Mutex for Dispatch Critical Section ───────────────────────────
+# Prevents double-booking: two simultaneous requests cannot both read the
+# ready-queue and pick the same cab before either removes it.
+# Mirrors OS kernel spinlock/mutex protecting the process scheduler.
+dispatch_lock = threading.Lock()
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Overriding logger to also emit websocket events
 original_log = dispatcher.logger.log
@@ -62,35 +70,47 @@ def get_surge():
 @app.route("/api/dispatch", methods=["POST"])
 def dispatch_ride():
     data = request.json
-    passenger_node  = int(data.get("passenger_node", 0))
-    destination_node = int(data.get("destination_node", passenger_node))  # default: drop at pickup
+    passenger_node   = int(data.get("passenger_node", 0))
+    destination_node = int(data.get("destination_node", passenger_node))
     method = data.get("method", "bfs")
 
-    old_surge = dispatcher.surge_engine.calculate_surge(
-        len(dispatcher.scheduler.process_list),
-        dispatcher.scheduler.get_active_count()
-    )
+    # ── Critical Section: acquire mutex before touching ready-queue ──────────
+    # Only ONE dispatch runs at a time — like an OS kernel holding the
+    # scheduler lock. Any concurrent request blocks here until released.
+    if not dispatch_lock.acquire(timeout=5):
+        return jsonify({"error": "Dispatch system busy — try again"}), 503
 
-    result = dispatcher.dispatch_ride(passenger_node, method)
+    try:
+        old_surge = dispatcher.surge_engine.calculate_surge(
+            len(dispatcher.scheduler.process_list),
+            dispatcher.scheduler.get_active_count()
+        )
 
-    if "error" in result:
-        return jsonify(result), 400
+        result = dispatcher.dispatch_ride(passenger_node, method)
 
-    pid = result["cab_pid"]
-    cab_pcb = dispatcher.scheduler.process_list[pid]
+        if "error" in result:
+            return jsonify(result), 400
 
-    # Store destination in the ride context
-    if cab_pcb.assigned_ride:
-        cab_pcb.assigned_ride["destination_node"] = destination_node
+        pid = result["cab_pid"]
+        cab_pcb = dispatcher.scheduler.process_list[pid]
 
-    # Update cab position to passenger_node (cab arrived at pickup)
-    cab_pcb.current_node = passenger_node
-    dispatcher.scheduler.cab_arrived_at_passenger(pid)
+        # Double-check: confirm cab is still DISPATCHED (not already re-assigned)
+        if cab_pcb.state.value not in ("DISPATCHED", "IDLE"):
+            return jsonify({"error": f"Cab {pid} already assigned — race condition prevented"}), 409
+
+        # Store destination and move cab to pickup node
+        if cab_pcb.assigned_ride:
+            cab_pcb.assigned_ride["destination_node"] = destination_node
+        cab_pcb.current_node = passenger_node
+        dispatcher.scheduler.cab_arrived_at_passenger(pid)  # DISPATCHED → EN_ROUTE
+
+    finally:
+        dispatch_lock.release()  # Always release — even on exception
+    # ── End Critical Section ─────────────────────────────────────────────────
 
     cab = cab_pcb.to_dict()
     cab["name"] = f"Cab-{pid:02d}"
 
-    # Emit dispatch + state events
     socketio.emit('dispatch_event', {
         'cab': cab, 'passenger_node': passenger_node,
         'destination_node': destination_node,
@@ -106,8 +126,7 @@ def dispatch_ride():
     if new_surge != old_surge:
         socketio.emit('surge_update', {'active': new_surge > 1.0, 'multiplier': new_surge})
 
-    # ── Auto-completion (OS timer interrupt simulation) ──────────────────
-    # Travel time = (hops + 1) * 3 seconds. Fewest hops = completes first.
+    # Auto-completion: fewest hops = shortest travel = completes first (OS priority)
     travel_secs = max(5, (result["hops"] + 1) * 3)
 
     def _auto_complete(pid, dest_node, delay):
@@ -115,10 +134,10 @@ def dispatch_ride():
         with app.app_context():
             pcb = dispatcher.scheduler.process_list.get(pid)
             if not pcb or pcb.state.value not in ("EN_ROUTE", "DISPATCHED"):
-                return  # already completed manually
+                return
             try:
                 dispatcher.scheduler.complete_ride(pid, dest_node)
-                pcb.current_node = dest_node   # move cab to destination
+                pcb.current_node = dest_node
                 dispatcher.logger.log("STATE_TRANSITION",
                     f"Cab P{pid:02d}: EN_ROUTE → COMPLETED → IDLE (auto, dest=node {dest_node})")
                 socketio.emit('state_change', {
@@ -137,10 +156,8 @@ def dispatch_ride():
             except Exception as e:
                 dispatcher.logger.log("SYSTEM_ERROR", f"Auto-complete failed for P{pid}: {e}")
 
-    import threading
     t = threading.Thread(target=_auto_complete, args=(pid, destination_node, travel_secs), daemon=True)
     t.start()
-    # ─────────────────────────────────────────────────────────────────────
 
     result["process_table"] = dispatcher.scheduler.process_table()
     result["cab"] = cab
