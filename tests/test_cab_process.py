@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import pytest
 from backend.cab_process import CabPCB, CabState, InvalidStateTransition
 
