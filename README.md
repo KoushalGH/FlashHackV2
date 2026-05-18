@@ -33,6 +33,13 @@ Each cab is modeled as a **process** with defined states:
     └───────────────────────────────────────────────────┘
 ```
 
+## 🔑 Design Decisions
+
+1. **"Why does BFS only search the ready queue?"** — Like an OS scheduler only considers READY processes, our dispatcher only considers IDLE cabs. Makes BFS faster AND semantically correct.
+2. **"Why a PCB per cab?"** — Each cab carries state, context (ride, route), and history. Mirrors PCBs in operating systems. Makes the system debuggable — inspect any cab's full lifecycle.
+3. **"Why validate state transitions?"** — Prevents double-dispatching (like an OS can't schedule an already-running process). Real mutual exclusion on cab resources.
+4. **"Why separate ready queue?"** — O(1) queue management vs O(n) scanning all cabs. Same reason OS maintains a ready queue instead of scanning the full process table.
+
 ## ✨ Features
 
 - 🗺️ **City Graph Model** — 25 intersections, 40+ roads as an adjacency list
@@ -87,20 +94,20 @@ python -m backend.benchmark
 ```
 FlashHackV2/
 ├── backend/
-│   ├── app.py              # Flask + WebSocket server
-│   ├── graph.py             # City graph, BFS, DFS algorithms
-│   ├── cab_manager.py       # Cab process state machine
-│   ├── dispatcher.py        # Dispatch logic (BFS + Brute Force)
-│   ├── benchmark.py         # Performance benchmarking
-│   ├── surge_pricing.py     # Surge pricing engine
-│   ├── city_data.py         # Hardcoded city graph data
-│   └── logger.py            # Structured event logger
+│   ├── app.py                   # Flask + WebSocket server
+│   ├── city_graph.py            # City graph, BFS, DFS algorithms
+│   ├── cab_process.py           # Cab process state machine (PCB)
+│   ├── scheduler.py             # OS-style cab scheduler & ready queue
+│   ├── dispatcher.py            # Dispatch logic (BFS + Brute Force)
+│   ├── benchmark.py             # Performance benchmarking
+│   ├── surge_pricing.py         # Surge pricing engine
+│   └── event_logger.py          # Structured event logger
 ├── frontend/
-│   ├── index.html           # Dashboard UI
-│   ├── css/style.css        # Dark-mode styling
-│   └── js/                  # Client-side logic
-├── tests/                   # pytest test suite
-├── docs/                    # Documentation
+│   ├── index.html               # Dashboard UI
+│   ├── css/style.css            # Dark-mode styling
+│   └── js/                      # Client-side logic
+├── tests/                       # pytest test suite
+├── docs/                        # Documentation
 ├── requirements.txt
 └── README.md
 ```
