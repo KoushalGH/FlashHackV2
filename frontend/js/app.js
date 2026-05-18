@@ -1,7 +1,8 @@
 /**
  * CabGrid — Main Application Controller
  * Handles dispatch controls, event log, benchmark display,
- * and state diagram toggle. Uses mock responses until backend wiring (Hour 2).
+ * and state diagram toggle. Wires to backend API via WS module,
+ * falls back to mock data when backend is unavailable.
  */
 
 const App = (() => {
@@ -26,9 +27,9 @@ const App = (() => {
     }
 
     /**
-     * Handle dispatch button click (mock response for now).
+     * Handle dispatch button click — uses API if connected, mock if not.
      */
-    function handleDispatch(method) {
+    async function handleDispatch(method) {
         const nodeSelect = document.getElementById('passenger-node');
         const passengerNode = parseInt(nodeSelect.value);
 
@@ -40,23 +41,68 @@ const App = (() => {
         const nodeName = StatePanel.NODE_NAMES[passengerNode] || `Node ${passengerNode}`;
         addLogEntry('RIDE_REQUEST', `Passenger at ${nodeName} (Node ${passengerNode})`, 'dispatch');
 
-        // In Hour 2, this will call POST /api/dispatch
-        // For now, show mock result
-        const mockResult = generateMockDispatch(passengerNode, method);
-        showDispatchResult(mockResult);
+        // Disable buttons during dispatch
+        setDispatchButtonsEnabled(false);
 
-        // Mock state transitions
-        if (mockResult.cab) {
-            addLogEntry('STATE', `${mockResult.cab.name}: IDLE → DISPATCHED (assigned ride)`, 'state');
-            addLogEntry('STATE', `${mockResult.cab.name}: DISPATCHED → EN_ROUTE (route computed)`, 'state');
-            addLogEntry('DISPATCH', `${mockResult.cab.name} dispatched via ${method.toUpperCase()} — ${mockResult.hops} hops, ${mockResult.time_ms}ms`, 'dispatch');
+        let result;
 
-            StatePanel.updateCabState(mockResult.cab.pid, 'EN_ROUTE', { passenger_node: passengerNode });
+        if (WS.isConnected()) {
+            // ===== LIVE API DISPATCH =====
+            result = await WS.dispatch(passengerNode, method);
+
+            if (result && !result.error) {
+                showDispatchResult(result);
+
+                // Log state transitions from the result
+                addLogEntry('DISPATCH',
+                    `${result.cab.name} dispatched via ${method.toUpperCase()} — ${result.hops} hops, ${result.time_ms}ms`,
+                    'dispatch');
+
+                if (result.alternatives && result.alternatives.length > 0) {
+                    addLogEntry('ROUTE', `DFS found ${result.alternatives.length} alternative route(s)`, 'route');
+                }
+
+                if (result.surge && result.surge.active) {
+                    addLogEntry('SURGE',
+                        `Surge active! ${(result.surge.ratio * 100).toFixed(0)}% fleet busy — ${result.surge.multiplier}x`,
+                        'surge');
+                }
+            } else if (result && result.error) {
+                addLogEntry('ERROR', result.error, 'error');
+            }
+
+        } else {
+            // ===== MOCK DISPATCH (offline mode) =====
+            result = generateMockDispatch(passengerNode, method);
+            if (result && !result.error) {
+                showDispatchResult(result);
+                addLogEntry('STATE', `${result.cab.name}: IDLE → DISPATCHED → EN_ROUTE`, 'state');
+                addLogEntry('DISPATCH',
+                    `${result.cab.name} dispatched via ${method.toUpperCase()} — ${result.hops} hops, ${result.time_ms}ms [MOCK]`,
+                    'dispatch');
+
+                StatePanel.updateCabState(result.cab.pid, 'EN_ROUTE', { passenger_node: passengerNode });
+
+                // Trigger graph animations
+                if (method === 'bfs') GraphViz.triggerBfsWave(passengerNode);
+                if (result.route) setTimeout(() => GraphViz.showRoute(result.route), 500);
+            }
+
+            checkSurge();
         }
+
+        setDispatchButtonsEnabled(true);
+    }
+
+    function setDispatchButtonsEnabled(enabled) {
+        const btnBfs = document.getElementById('btn-dispatch-bfs');
+        const btnBrute = document.getElementById('btn-dispatch-brute');
+        if (btnBfs) btnBfs.disabled = !enabled;
+        if (btnBrute) btnBrute.disabled = !enabled;
     }
 
     /**
-     * Generate a mock dispatch result for demo purposes.
+     * Generate a mock dispatch result for offline demo.
      */
     function generateMockDispatch(passengerNode, method) {
         const cabs = StatePanel.getCabs().filter(c => c.state === 'IDLE');
@@ -70,7 +116,6 @@ const App = (() => {
         const timeBfs = (Math.random() * 0.5 + 0.05).toFixed(3);
         const timeBrute = (Math.random() * 5 + 1).toFixed(3);
 
-        // Generate mock route
         const route = [selectedCab.node];
         let current = selectedCab.node;
         for (let i = 0; i < hops; i++) {
@@ -80,7 +125,7 @@ const App = (() => {
         route[route.length - 1] = passengerNode;
 
         return {
-            cab: selectedCab,
+            cab: { pid: selectedCab.pid, name: selectedCab.name || `Cab-${String(selectedCab.pid).padStart(2, '0')}`, node: selectedCab.node },
             method: method,
             hops: hops,
             time_ms: method === 'bfs' ? timeBfs : timeBrute,
@@ -105,30 +150,44 @@ const App = (() => {
         document.getElementById('result-hops').textContent = `${result.hops} hops`;
         document.getElementById('result-time').textContent = `${result.time_ms} ms`;
 
-        const routeNames = result.route.map(n => StatePanel.NODE_NAMES[n] || `N${n}`);
+        const routeNames = result.route.map(n => {
+            const name = StatePanel.NODE_NAMES[n];
+            return name ? name : `N${n}`;
+        });
         document.getElementById('result-route').textContent = routeNames.join(' → ');
 
         // Animate result panel
         panel.style.animation = 'none';
-        panel.offsetHeight; // trigger reflow
+        panel.offsetHeight;
         panel.style.animation = 'logSlide 0.3s ease-out';
     }
 
     // ===== Benchmark =====
 
-    function handleBenchmark() {
+    async function handleBenchmark() {
         addLogEntry('BENCHMARK', 'Running BFS vs Brute Force comparison...', 'route');
 
-        // Mock benchmark data (replaced with real API call in Hour 2)
-        const results = [
-            { nodes: 25,  cabs: 10,  bfs_ms: 0.12,  brute_ms: 0.45,  speedup: '3.8x' },
-            { nodes: 100, cabs: 50,  bfs_ms: 0.34,  brute_ms: 8.72,  speedup: '25.6x' },
-            { nodes: 200, cabs: 80,  bfs_ms: 0.67,  brute_ms: 42.1,  speedup: '62.8x' },
-            { nodes: 500, cabs: 200, bfs_ms: 1.23,  brute_ms: 198.5, speedup: '161.4x' },
-        ];
+        let results;
+
+        if (WS.isConnected()) {
+            const data = await WS.runBenchmark();
+            if (data && data.results) {
+                results = data.results;
+            }
+        }
+
+        // Fallback to mock data
+        if (!results) {
+            results = [
+                { nodes: 25,  cabs: 10,  bfs_ms: 0.12,  brute_ms: 0.45,  speedup: '3.8x' },
+                { nodes: 100, cabs: 50,  bfs_ms: 0.34,  brute_ms: 8.72,  speedup: '25.6x' },
+                { nodes: 200, cabs: 80,  bfs_ms: 0.67,  brute_ms: 42.1,  speedup: '62.8x' },
+                { nodes: 500, cabs: 200, bfs_ms: 1.23,  brute_ms: 198.5, speedup: '161.4x' },
+            ];
+        }
 
         showBenchmarkResult(results);
-        addLogEntry('BENCHMARK', 'Benchmark complete — BFS significantly outperforms brute force', 'route');
+        addLogEntry('BENCHMARK', `Benchmark complete — BFS outperforms brute force across ${results.length} graph sizes`, 'route');
     }
 
     function showBenchmarkResult(results) {
@@ -157,20 +216,30 @@ const App = (() => {
 
     // ===== Complete All Rides =====
 
-    function handleCompleteAll() {
-        const cabs = StatePanel.getCabs();
-        let completed = 0;
-        cabs.forEach(cab => {
-            if (cab.state === 'EN_ROUTE' || cab.state === 'DISPATCHED') {
-                addLogEntry('STATE', `${cab.name}: ${cab.state} → COMPLETED → IDLE`, 'state');
-                StatePanel.updateCabState(cab.pid, 'IDLE', null);
-                completed++;
+    async function handleCompleteAll() {
+        if (WS.isConnected()) {
+            const data = await WS.completeAll();
+            if (data) {
+                addLogEntry('SYSTEM', `${data.completed} ride(s) completed. Cabs returned to ready queue.`, 'system');
+                GraphViz.clearAnimations();
             }
-        });
-        if (completed > 0) {
-            addLogEntry('SYSTEM', `${completed} ride(s) completed. Cabs returned to ready queue.`, 'system');
         } else {
-            addLogEntry('SYSTEM', 'No active rides to complete.', 'system');
+            // Mock: complete all active rides locally
+            const cabs = StatePanel.getCabs();
+            let completed = 0;
+            cabs.forEach(cab => {
+                if (cab.state === 'EN_ROUTE' || cab.state === 'DISPATCHED') {
+                    StatePanel.updateCabState(cab.pid, 'IDLE', null);
+                    completed++;
+                }
+            });
+            if (completed > 0) {
+                addLogEntry('SYSTEM', `${completed} ride(s) completed. Cabs returned to ready queue.`, 'system');
+            } else {
+                addLogEntry('SYSTEM', 'No active rides to complete.', 'system');
+            }
+            GraphViz.clearAnimations();
+            checkSurge();
         }
     }
 
@@ -193,6 +262,11 @@ const App = (() => {
 
         container.appendChild(entry);
         container.scrollTop = container.scrollHeight;
+
+        // Limit log entries to avoid memory issues
+        while (container.children.length > 200) {
+            container.removeChild(container.firstChild);
+        }
     }
 
     function clearLog() {
@@ -215,7 +289,7 @@ const App = (() => {
         });
     }
 
-    // ===== Surge Pricing Check =====
+    // ===== Surge Pricing Check (mock mode) =====
 
     function checkSurge() {
         const cabs = StatePanel.getCabs();
@@ -229,11 +303,9 @@ const App = (() => {
         if (ratio > 0.8) {
             banner.style.display = 'flex';
             banner.querySelector('.surge-text').textContent = 'SURGE 2.0x';
-            addLogEntry('SURGE', `High surge activated! ${(ratio * 100).toFixed(0)}% fleet active — 2.0x multiplier`, 'surge');
         } else if (ratio > 0.6) {
             banner.style.display = 'flex';
             banner.querySelector('.surge-text').textContent = 'SURGE 1.5x';
-            addLogEntry('SURGE', `Surge activated! ${(ratio * 100).toFixed(0)}% fleet active — 1.5x multiplier`, 'surge');
         } else {
             banner.style.display = 'none';
         }
@@ -252,17 +324,19 @@ const App = (() => {
         const btnComplete = document.getElementById('btn-complete-all');
         const btnClearLog = document.getElementById('btn-clear-log');
 
-        if (btnBfs) btnBfs.addEventListener('click', () => { handleDispatch('bfs'); checkSurge(); });
-        if (btnBrute) btnBrute.addEventListener('click', () => { handleDispatch('brute'); checkSurge(); });
+        if (btnBfs) btnBfs.addEventListener('click', () => handleDispatch('bfs'));
+        if (btnBrute) btnBrute.addEventListener('click', () => handleDispatch('brute'));
         if (btnBench) btnBench.addEventListener('click', handleBenchmark);
         if (btnComplete) btnComplete.addEventListener('click', handleCompleteAll);
         if (btnClearLog) btnClearLog.addEventListener('click', clearLog);
 
         addLogEntry('SYSTEM', 'CabGrid dashboard loaded. 10 cabs in fleet.', 'system');
-        addLogEntry('SYSTEM', 'Using mock data — connect backend for live dispatch.', 'system');
+
+        // Try to connect to backend
+        WS.connect();
     }
 
-    // Public API (used by websocket.js in Hour 2)
+    // Public API
     return { init, addLogEntry, showDispatchResult, showBenchmarkResult, checkSurge };
 })();
 
