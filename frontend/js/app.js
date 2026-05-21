@@ -102,9 +102,12 @@ const App = (() => {
                 // Flash the dispatched cab on graph
                 if (cabPid) GraphViz.flashCab(cabPid);
 
-                if (result.surge && result.surge.active) {
+                const surge = typeof result.surge === 'number'
+                    ? { active: result.surge > 1.0, multiplier: result.surge }
+                    : result.surge;
+                if (surge && surge.active) {
                     addLogEntry('SURGE',
-                        `Surge active! ${(result.surge.ratio * 100).toFixed(0)}% fleet busy — ${result.surge.multiplier}x`,
+                        `Surge active! ${surge.multiplier}x multiplier`,
                         'surge');
                 }
             } else if (result && result.error) {
@@ -125,7 +128,11 @@ const App = (() => {
 
                 // Trigger graph animations
                 if (method === 'bfs') GraphViz.triggerBfsWave(passengerNode);
-                if (result.route) setTimeout(() => GraphViz.showRoute(result.route), 500);
+                if (result.route) {
+                    const routePid = result.cab_pid || (result.cab && result.cab.pid);
+                    const clearSecs = result.auto_complete_secs != null ? result.auto_complete_secs : 6;
+                    setTimeout(() => GraphViz.showRoute(result.route, routePid, clearSecs), 500);
+                }
             }
 
             checkSurge();
@@ -185,9 +192,9 @@ const App = (() => {
         }
 
         panel.style.display = 'block';
-        const cabName = result._cabName || (result.cab && result.cab.name)
-            ? (result._cabName || result.cab.name)
-            : `Cab-${String((result.cab && result.cab.pid) || result.cab_pid || '?').padStart(2,'0')}`;
+        const cabName = result._cabName
+            || (result.cab && result.cab.name)
+            || `Cab-${String((result.cab && result.cab.pid) || result.cab_pid || '?').padStart(2, '0')}`;
         const dispMethod = result._method || result.method || 'BFS';
 
         panel.className = 'dispatch-result';

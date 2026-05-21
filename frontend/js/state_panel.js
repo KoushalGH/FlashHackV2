@@ -67,7 +67,15 @@ const StatePanel = (() => {
 
             const nodeName = NODE_NAMES[nodeId] !== undefined ? NODE_NAMES[nodeId] : `Node ${nodeId}`;
             const rideInfo = rideData
-                ? `→ ${NODE_NAMES[rideData.passenger_node] || `Node ${rideData.passenger_node}`}`
+                ? (() => {
+                    const pickup = NODE_NAMES[rideData.passenger_node] || `Node ${rideData.passenger_node}`;
+                    const destId = rideData.destination_node;
+                    if (destId !== undefined && destId !== rideData.passenger_node) {
+                        const dest = NODE_NAMES[destId] || `Node ${destId}`;
+                        return `${pickup} → ${dest}`;
+                    }
+                    return `→ ${pickup}`;
+                })()
                 : '—';
             const sc = stateClass(state);
 

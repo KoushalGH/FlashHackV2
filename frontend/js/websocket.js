@@ -58,6 +58,9 @@ const WS = (() => {
                 const oldState = data.old_state || data.old || '?';
                 const newState = data.new_state || data.new || '?';
                 App.addLogEntry('STATE', `${cabName}: ${oldState} → ${newState}`, 'state');
+                if (newState === 'IDLE') {
+                    GraphViz.clearRouteForCab(data.pid);
+                }
                 refreshCabs();
             });
 
@@ -68,7 +71,10 @@ const WS = (() => {
                     : `Cab-${String(data.cab && data.cab.pid || '?').padStart(2, '0')}`;
                 const method = (data.method || 'bfs').toUpperCase();
                 App.addLogEntry('DISPATCH', `${cabName} dispatched via ${method}`, 'dispatch');
-                if (data.route) GraphViz.showRoute(data.route);
+                if (data.route) {
+                    const pid = data.cab && data.cab.pid;
+                    GraphViz.showRoute(data.route, pid, 6);
+                }
                 refreshCabs();
             });
 
@@ -106,6 +112,11 @@ const WS = (() => {
                 if (data.process_table) {
                     StatePanel.render(data.process_table);
                     GraphViz.setCabs(data.process_table);
+                    GraphViz.syncRouteWithFleet(data.process_table);
+                    const cab = data.process_table.find(c => c.pid === data.pid);
+                    if (cab && cab.state === 'IDLE') {
+                        GraphViz.clearRouteForCab(data.pid);
+                    }
                 }
             });
 
@@ -133,6 +144,7 @@ const WS = (() => {
                 const cabsData = await cabsRes.json();
                 StatePanel.render(cabsData.cabs);
                 GraphViz.setCabs(cabsData.cabs);
+                GraphViz.syncRouteWithFleet(cabsData.cabs);
             }
 
             // Populate dropdown from real graph data
@@ -186,9 +198,15 @@ const WS = (() => {
             const data = await res.json();
             StatePanel.render(data.cabs);
             GraphViz.setCabs(data.cabs);
+            GraphViz.syncRouteWithFleet(data.cabs);
         } catch (err) {
             // Silently fail — will retry on next event
         }
+    }
+
+    /** Poll cab state after dispatch so route clears when ride ends (WS may be down). */
+    function schedulePostDispatchSync() {
+        [2500, 5500, 7500].forEach(ms => setTimeout(() => refreshCabs(), ms));
     }
 
     /**
@@ -226,14 +244,19 @@ const WS = (() => {
 
             // Show route on graph
             if (data.route) {
-                setTimeout(() => GraphViz.showRoute(data.route), 500);
+                const routePid = data.cab_pid || (data.cab && data.cab.pid);
+                const clearSecs = data.auto_complete_secs != null ? data.auto_complete_secs : 6;
+                setTimeout(() => GraphViz.showRoute(data.route, routePid, clearSecs), 500);
             }
 
             // Update process table and cabs on graph
             if (data.process_table) {
                 StatePanel.render(data.process_table);
                 GraphViz.setCabs(data.process_table);
+                GraphViz.syncRouteWithFleet(data.process_table);
             }
+
+            schedulePostDispatchSync();
 
             // Update surge banner
             if (data.surge) {
@@ -277,6 +300,7 @@ const WS = (() => {
             if (data.process_table) {
                 StatePanel.render(data.process_table);
                 GraphViz.setCabs(data.process_table);
+                GraphViz.syncRouteWithFleet(data.process_table);
             }
             if (data.surge) updateSurgeBanner(data.surge);
 
@@ -301,13 +325,24 @@ const WS = (() => {
         }
     }
 
+    function normalizeSurge(surgeData) {
+        if (surgeData == null) return null;
+        if (typeof surgeData === 'number') {
+            return { active: surgeData > 1.0, multiplier: surgeData };
+        }
+        return surgeData;
+    }
+
     function updateSurgeBanner(surgeData) {
         const banner = document.getElementById('surge-banner');
         if (!banner) return;
 
-        if (surgeData.active) {
+        const surge = normalizeSurge(surgeData);
+        if (!surge) return;
+
+        if (surge.active) {
             banner.style.display = 'flex';
-            banner.querySelector('.surge-text').textContent = `SURGE ${surgeData.multiplier}x`;
+            banner.querySelector('.surge-text').textContent = `SURGE ${surge.multiplier}x`;
         } else {
             banner.style.display = 'none';
         }

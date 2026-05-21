@@ -41,6 +41,9 @@ const GraphViz = (() => {
     let highlightRoute = [];
     let highlightRouteProgress = 0;
     let routeDotProgress = 0;
+    let routeAnimationId = null;
+    let activeRoutePid = null;
+    let routeClearTimer = null;
     let selectedNode = null;
     let dispatchFlashPid = null;
     let dispatchFlashTime = 0;
@@ -92,6 +95,7 @@ const GraphViz = (() => {
      */
     function setCabs(cabData) {
         cabs = cabData || [];
+        syncRouteWithFleet(cabs);
     }
 
     /**
@@ -344,30 +348,77 @@ const GraphViz = (() => {
 
     // ===== Route Highlight =====
 
-    function showRoute(routeNodeIds) {
+    function cancelRouteAnimation() {
+        if (routeAnimationId != null) {
+            cancelAnimationFrame(routeAnimationId);
+            routeAnimationId = null;
+        }
+    }
+
+    function cancelRouteClearTimer() {
+        if (routeClearTimer != null) {
+            clearTimeout(routeClearTimer);
+            routeClearTimer = null;
+        }
+    }
+
+    function clearRoute() {
+        cancelRouteAnimation();
+        cancelRouteClearTimer();
+        highlightRoute = [];
+        highlightRouteProgress = 0;
+        routeDotProgress = 0;
+        activeRoutePid = null;
+    }
+
+    function clearRouteForCab(pid) {
+        const p = Number(pid);
+        if (activeRoutePid == null || Number(activeRoutePid) === p) {
+            clearRoute();
+        }
+    }
+
+    /** Hide route when no cabs are on a trip (works even if WebSocket missed IDLE events). */
+    function syncRouteWithFleet(cabList) {
+        if (!highlightRoute.length) return;
+        const list = cabList || cabs;
+        const hasActive = list.some(c =>
+            c.state === 'DISPATCHED' || c.state === 'EN_ROUTE'
+        );
+        if (!hasActive) clearRoute();
+    }
+
+    function showRoute(routeNodeIds, pid, autoClearSecs) {
+        clearRoute();
+        activeRoutePid = pid != null ? Number(pid) : null;
         highlightRoute = routeNodeIds || [];
         highlightRouteProgress = 0;
         routeDotProgress = 0;
 
         if (highlightRoute.length > 1) {
             const animateRoute = () => {
+                if (highlightRoute.length < 2) return;
                 highlightRouteProgress += 0.025;
                 routeDotProgress += 0.008;
-                if (routeDotProgress > 1) routeDotProgress = 0; // loop the dot
+                if (routeDotProgress > 1) routeDotProgress = 0;
                 if (highlightRouteProgress < 1) {
-                    requestAnimationFrame(animateRoute);
+                    routeAnimationId = requestAnimationFrame(animateRoute);
                 } else {
-                    // Keep dot moving after path is fully drawn
                     const loopDot = () => {
+                        if (highlightRoute.length < 2) return;
                         routeDotProgress += 0.008;
                         if (routeDotProgress > 1) routeDotProgress = 0;
-                        if (highlightRoute.length > 0) requestAnimationFrame(loopDot);
+                        routeAnimationId = requestAnimationFrame(loopDot);
                     };
-                    loopDot();
+                    routeAnimationId = requestAnimationFrame(loopDot);
                 }
             };
-            animateRoute();
+            routeAnimationId = requestAnimationFrame(animateRoute);
         }
+
+        // Fallback: clear route when auto-ride finishes (WebSocket may be disconnected)
+        const secs = autoClearSecs != null ? Number(autoClearSecs) : 6;
+        routeClearTimer = setTimeout(() => clearRoute(), secs * 1000 + 400);
     }
 
     function drawHighlightRoute() {
@@ -444,9 +495,7 @@ const GraphViz = (() => {
      */
     function clearAnimations() {
         bfsWaveActive = false;
-        highlightRoute = [];
-        highlightRouteProgress = 0;
-        routeDotProgress = 0;
+        clearRoute();
         selectedNode = null;
         dispatchFlashPid = null;
     }
@@ -517,6 +566,9 @@ const GraphViz = (() => {
         setCabs,
         triggerBfsWave,
         showRoute,
+        clearRoute,
+        clearRouteForCab,
+        syncRouteWithFleet,
         clearAnimations,
         flashCab
     };

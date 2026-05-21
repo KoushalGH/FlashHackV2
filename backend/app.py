@@ -68,9 +68,17 @@ def get_surge():
     mult = dispatcher.surge_engine.calculate_surge(total, active)
     return jsonify({"active": mult > 1.0, "multiplier": mult})
 
+def _ride_destination(cab_pcb):
+    """Resolve drop-off node from assigned ride, falling back to pickup/current."""
+    ride = cab_pcb.assigned_ride
+    if ride:
+        return ride.get("destination_node", ride.get("passenger_node", cab_pcb.current_node))
+    return cab_pcb.current_node
+
+
 @app.route("/api/dispatch", methods=["POST"])
 def dispatch_ride():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     passenger_node   = int(data.get("passenger_node", 0))
     destination_node = int(data.get("destination_node", passenger_node))
     method = data.get("method", "bfs")
@@ -95,8 +103,8 @@ def dispatch_ride():
         pid = result["cab_pid"]
         cab_pcb = dispatcher.scheduler.process_list[pid]
 
-        # Double-check: confirm cab is still DISPATCHED (not already re-assigned)
-        if cab_pcb.state.value not in ("DISPATCHED", "IDLE"):
+        # Double-check: confirm cab entered DISPATCHED after assignment
+        if cab_pcb.state.value != "DISPATCHED":
             return jsonify({"error": f"Cab {pid} already assigned — race condition prevented"}), 409
 
         # Store destination for the ride context
@@ -199,63 +207,70 @@ def dispatch_ride():
     result["method"] = method
     result["destination_node"] = destination_node
     result["auto_complete_secs"] = travel_secs
+    result["surge"] = {"active": new_surge > 1.0, "multiplier": new_surge}
     return jsonify(result)
 
 @app.route("/api/complete", methods=["POST"])
 def complete_ride():
-    data = request.json
+    data = request.get_json(silent=True) or {}
 
-    # Complete ALL active rides at once (sent by "Complete All" button)
-    if data.get("all"):
-        completed = 0
-        for pid, cab_pcb in dispatcher.scheduler.process_list.items():
-            if cab_pcb.state.value in ("EN_ROUTE", "DISPATCHED"):
-                dest_node = cab_pcb.assigned_ride["passenger_node"] if cab_pcb.assigned_ride else cab_pcb.current_node
-                if cab_pcb.state.value == "DISPATCHED":
-                    dispatcher.scheduler.cab_arrived_at_passenger(pid)
-                dispatcher.scheduler.complete_ride(pid, dest_node)
-                socketio.emit('state_change', {
-                    'pid': pid, 'old_state': 'EN_ROUTE', 'new_state': 'IDLE',
-                    'reason': "Ride completed", 'timestamp': time.time()
-                })
-                completed += 1
+    if not dispatch_lock.acquire(timeout=5):
+        return jsonify({"error": "Dispatch system busy — try again"}), 503
+
+    try:
+        # Complete ALL active rides at once (sent by "Complete All" button)
+        if data.get("all"):
+            completed = 0
+            for pid, cab_pcb in dispatcher.scheduler.process_list.items():
+                if cab_pcb.state.value in ("EN_ROUTE", "DISPATCHED"):
+                    dest_node = _ride_destination(cab_pcb)
+                    if cab_pcb.state.value == "DISPATCHED":
+                        dispatcher.scheduler.cab_arrived_at_passenger(pid)
+                    dispatcher.scheduler.complete_ride(pid, dest_node)
+                    socketio.emit('state_change', {
+                        'pid': pid, 'old_state': 'EN_ROUTE', 'new_state': 'IDLE',
+                        'reason': "Ride completed", 'timestamp': time.time()
+                    })
+                    completed += 1
+            total = len(dispatcher.scheduler.process_list)
+            active = dispatcher.scheduler.get_active_count()
+            new_surge = dispatcher.surge_engine.calculate_surge(total, active)
+            socketio.emit('surge_update', {'active': new_surge > 1.0, 'multiplier': new_surge})
+            return jsonify({
+                "completed": completed,
+                "process_table": dispatcher.scheduler.process_table(),
+                "surge": {"active": new_surge > 1.0, "multiplier": new_surge}
+            })
+
+        # Complete single cab by pid
+        pid = int(data.get("cab_pid", -1))
+        if pid == -1:
+            return jsonify({"error": "cab_pid required"}), 400
+
+        cab_pcb = dispatcher.scheduler.process_list.get(pid)
+        if not cab_pcb:
+            return jsonify({"error": f"Cab {pid} not found"}), 404
+
+        if cab_pcb.state.value not in ("EN_ROUTE", "DISPATCHED"):
+            return jsonify({"error": "Cab is not on a ride"}), 400
+
+        dest_node = _ride_destination(cab_pcb)
+        if cab_pcb.state.value == "DISPATCHED":
+            dispatcher.scheduler.cab_arrived_at_passenger(pid)
+        dispatcher.scheduler.complete_ride(pid, dest_node)
+
+        socketio.emit('state_change', {
+            'pid': pid, 'old_state': 'EN_ROUTE', 'new_state': 'IDLE',
+            'reason': "Ride completed", 'timestamp': time.time()
+        })
         total = len(dispatcher.scheduler.process_list)
         active = dispatcher.scheduler.get_active_count()
         new_surge = dispatcher.surge_engine.calculate_surge(total, active)
         socketio.emit('surge_update', {'active': new_surge > 1.0, 'multiplier': new_surge})
-        return jsonify({
-            "completed": completed,
-            "process_table": dispatcher.scheduler.process_table(),
-            "surge": {"active": new_surge > 1.0, "multiplier": new_surge}
-        })
 
-    # Complete single cab by pid
-    pid = int(data.get("cab_pid", -1))
-    if pid == -1:
-        return jsonify({"error": "cab_pid required"}), 400
-
-    cab_pcb = dispatcher.scheduler.process_list.get(pid)
-    if not cab_pcb:
-        return jsonify({"error": f"Cab {pid} not found"}), 404
-
-    if cab_pcb.state.value not in ("EN_ROUTE", "DISPATCHED"):
-        return jsonify({"error": "Cab is not on a ride"}), 400
-
-    dest_node = cab_pcb.assigned_ride["passenger_node"] if cab_pcb.assigned_ride else cab_pcb.current_node
-    if cab_pcb.state.value == "DISPATCHED":
-        dispatcher.scheduler.cab_arrived_at_passenger(pid)
-    dispatcher.scheduler.complete_ride(pid, dest_node)
-
-    socketio.emit('state_change', {
-        'pid': pid, 'old_state': 'EN_ROUTE', 'new_state': 'IDLE',
-        'reason': "Ride completed", 'timestamp': time.time()
-    })
-    total = len(dispatcher.scheduler.process_list)
-    active = dispatcher.scheduler.get_active_count()
-    new_surge = dispatcher.surge_engine.calculate_surge(total, active)
-    socketio.emit('surge_update', {'active': new_surge > 1.0, 'multiplier': new_surge})
-
-    return jsonify({"success": True, "cab": cab_pcb.to_dict()})
+        return jsonify({"success": True, "cab": cab_pcb.to_dict()})
+    finally:
+        dispatch_lock.release()
 
 @app.route("/api/benchmark", methods=["POST"])
 def run_benchmark_api():

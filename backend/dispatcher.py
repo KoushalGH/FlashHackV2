@@ -42,6 +42,9 @@ class Dispatcher:
             return {"error": "Unreachable passenger"}
 
         pid = self.scheduler.get_pid_at_node(nearest_node)
+        if pid == -1:
+            self.logger.log("SYSTEM_ERROR", f"No IDLE cab found at node {nearest_node}")
+            return {"error": "No cab available at nearest node"}
 
         # Surge pricing — calculated from OS process table state
         total_cabs  = len(self.scheduler.process_list)
